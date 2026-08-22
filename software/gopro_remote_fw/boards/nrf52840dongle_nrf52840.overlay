@@ -1,0 +1,40 @@
+/*
+ * Overlay pour nrf52840dongle_nrf52840 (PCA10059).
+ *
+ * IMPORTANT : le dongle n'a QU'UN SEUL bouton cable en usine (SW1, utilise
+ * pour entrer en mode DFU au demarrage) et une LED RGB - pas de boutons
+ * utilisateur supplementaires. Pour tes 2 (puis 5) boutons, il faut les
+ * cabler toi-meme sur les pastilles castellated exposees sur le bord de la
+ * carte.
+ *
+ * Les pins ci-dessous (P0.13 et P0.15) sont donnees a titre d'exemple
+ * courant dans la communaute nRF52840 Dongle - VERIFIE-LES contre le
+ * "Pin assignment" du User Guide Nordic (nRF52840 Dongle, PCA10059) avant
+ * de souder quoi que ce soit, certaines pastilles sont partagees avec les
+ * lignes USB D+/D- et NE DOIVENT PAS etre utilisees en GPIO.
+ */
+
+/ {
+	buttons {
+		compatible = "gpio-keys";
+
+		button_cam_on: button_cam_on {
+			gpios = <&gpio0 13 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Camera ON";
+		};
+
+		button_cam_off: button_cam_off {
+			gpios = <&gpio0 15 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Camera OFF";
+		};
+
+		/* A ajouter plus tard, une fois les 3 boutons Garmin cables :
+		 * button_page_r, button_page_l, button_lap
+		 */
+	};
+
+	aliases {
+		sw-cam-on = &button_cam_on;
+		sw-cam-off = &button_cam_off;
+	};
+};
