@@ -31,6 +31,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/sys/byteorder.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
@@ -51,9 +52,11 @@ LOG_MODULE_REGISTER(gopro_remote, LOG_LEVEL_INF);
  *   - GP-0072 = Command (ecriture)
  *   - GP-0073 = Command Response (notification)
  * ------------------------------------------------------------------- */
-#define BT_UUID_GOPRO_SERVICE_VAL   0xfea6
-static struct bt_uuid_16 uuid_gopro_service =
-	BT_UUID_INIT_16(BT_UUID_GOPRO_SERVICE_VAL);
+
+
+ #define BT_UUID_GOPRO_SERVICE_VAL   0xfea6
+
+//static struct bt_uuid_16 uuid_gopro_service =	BT_UUID_INIT_16(BT_UUID_GOPRO_SERVICE_VAL);
 
 #define BT_UUID_GOPRO_CMD_VAL \
 	BT_UUID_128_ENCODE(0xb5f90072, 0xaa8d, 0x11e3, 0x9046, 0x0002a5d5c51b)
@@ -123,6 +126,7 @@ static void gopro_send_shutter(bool on)
 }
 
 /* Stub pour les futurs boutons Garmin (ANT+, pas encore implemente) */
+static void handle_garmin_button(const char *which) __attribute__((unused));
 static void handle_garmin_button(const char *which)
 {
 	LOG_WRN("Bouton Garmin '%s' presse - ANT+ non implemente pour l'instant",
