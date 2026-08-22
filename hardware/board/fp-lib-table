@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "RemoteLocal")(type "KiCad")(uri "${KIPRJMOD}/RemoteLocal.pretty")(options "")(descr "Footprints locaux du projet (E73 pads etendus)"))
+)

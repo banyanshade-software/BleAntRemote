@@ -1,0 +1,73 @@
+(footprint "E73-2G4M08S1E_hand_solder"
+    (version 20221018)
+    (generator "manual_template")
+    (layer "F.Cu")
+    (descr "EBYTE E73-2G4M08S1E - footprint a pads etendus pour soudure a la main. GABARIT: le pinout exact (position/fonction de chaque broche) doit etre recale sur le datasheet Ebyte ou la librairie github.com/spbnick/kicad-lib avant fabrication.")
+    (tags "E73 nRF52833 nRF52840 castellated hand-solder")
+
+    ;; ---------------------------------------------------------------
+    ;; Corps du module (silkscreen) : 18.0mm x 13.0mm, centre en (0,0)
+    ;; ---------------------------------------------------------------
+    (fp_rect (start -9 -6.5) (end 9 6.5)
+        (stroke (width 0.1) (type solid)) (fill none) (layer "F.SilkS"))
+
+    ;; Marqueur pin 1 (coin haut-gauche)
+    (fp_circle (center -8.3 -5.8) (end -8.0 -5.8)
+        (stroke (width 0.15) (type solid)) (fill solid) (layer "F.SilkS"))
+
+    (fp_text reference "REF**" (at 0 -8) (layer "F.SilkS")
+        (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value "E73-2G4M08S1E" (at 0 8) (layer "F.Fab")
+        (effects (font (size 1 1) (thickness 0.15))))
+
+    ;; ---------------------------------------------------------------
+    ;; PRINCIPE : chaque pad castellated (le "vrai" contact electrique,
+    ;; positionne pile sur le bord du module comme dans le datasheet)
+    ;; est complete par un pad d'extension rectangulaire qui deborde
+    ;; de 2.2mm vers l'exterieur -> zone large et facile d'acces au fer
+    ;; a souder, au lieu du demi-trou minuscule (0.5-1.0mm) seul.
+    ;;
+    ;; Cote GAUCHE : ex. 6 broches, pitch 1.27mm (A ADAPTER au vrai pitch)
+    ;; ---------------------------------------------------------------
+
+    ;; --- Pad 1 (exemple complet, a dupliquer/adapter pour les 43 broches) ---
+    ;; Pad castellated d'origine (contact reel sous le module)
+    (pad "1" smd rect (at -9 -5.08) (size 0.8 1.0) (layer "F.Cu" "F.Mask")
+        (thermal_bridge_angle 90))
+    ;; Pad d'extension (languette accessible au fer, vers l'exterieur/la gauche)
+    (pad "1" smd rect (at -10.6 -5.08) (size 2.4 1.0) (layer "F.Cu" "F.Mask" "F.Paste")
+        (thermal_bridge_angle 90))
+
+    (pad "2" smd rect (at -9 -3.81) (size 0.8 1.0) (layer "F.Cu" "F.Mask"))
+    (pad "2" smd rect (at -10.6 -3.81) (size 2.4 1.0) (layer "F.Cu" "F.Mask" "F.Paste"))
+
+    (pad "3" smd rect (at -9 -2.54) (size 0.8 1.0) (layer "F.Cu" "F.Mask"))
+    (pad "3" smd rect (at -10.6 -2.54) (size 2.4 1.0) (layer "F.Cu" "F.Mask" "F.Paste"))
+
+    (pad "4" smd rect (at -9 -1.27) (size 0.8 1.0) (layer "F.Cu" "F.Mask"))
+    (pad "4" smd rect (at -10.6 -1.27) (size 2.4 1.0) (layer "F.Cu" "F.Mask" "F.Paste"))
+
+    (pad "5" smd rect (at -9 0) (size 0.8 1.0) (layer "F.Cu" "F.Mask"))
+    (pad "5" smd rect (at -10.6 0) (size 2.4 1.0) (layer "F.Cu" "F.Mask" "F.Paste"))
+
+    (pad "6" smd rect (at -9 1.27) (size 0.8 1.0) (layer "F.Cu" "F.Mask"))
+    (pad "6" smd rect (at -10.6 1.27) (size 2.4 1.0) (layer "F.Cu" "F.Mask" "F.Paste"))
+
+    ;; ---------------------------------------------------------------
+    ;; Cote DROIT : meme principe, extension vers la droite
+    ;; ---------------------------------------------------------------
+    (pad "22" smd rect (at 9 1.27) (size 0.8 1.0) (layer "F.Cu" "F.Mask"))
+    (pad "22" smd rect (at 10.6 1.27) (size 2.4 1.0) (layer "F.Cu" "F.Mask" "F.Paste"))
+
+    (pad "23" smd rect (at 9 0) (size 0.8 1.0) (layer "F.Cu" "F.Mask"))
+    (pad "23" smd rect (at 10.6 0) (size 2.4 1.0) (layer "F.Cu" "F.Mask" "F.Paste"))
+
+    ;; ... repeter pour toutes les broches restantes (7 a 21, 24 a 43)
+    ;; en respectant le pitch et la repartition exacts du datasheet.
+
+    ;; ---------------------------------------------------------------
+    ;; Keepout : aucune piste/via sous le module (il doit reposer a plat)
+    ;; ---------------------------------------------------------------
+    (fp_rect (start -9 -6.5) (end 9 6.5)
+        (stroke (width 0.05) (type dash)) (fill none) (layer "Dwgs.User"))
+)
