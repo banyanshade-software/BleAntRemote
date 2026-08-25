@@ -31,8 +31,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
-#include <zephyr/sys/byteorder.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/byteorder.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 
@@ -87,14 +87,21 @@ static struct bt_gatt_subscribe_params subscribe_params;
  * ------------------------------------------------------------------- */
 #define BTN_CAM_ON_NODE  DT_ALIAS(sw_cam_on)
 #define BTN_CAM_OFF_NODE DT_ALIAS(sw_cam_off)
+#define BTN_SW1_NODE     DT_ALIAS(sw1)
 
-static const struct gpio_dt_spec btn_cam_on =
-	GPIO_DT_SPEC_GET(BTN_CAM_ON_NODE, gpios);
-static const struct gpio_dt_spec btn_cam_off =
-	GPIO_DT_SPEC_GET(BTN_CAM_OFF_NODE, gpios);
+//static const struct gpio_dt_spec btn_cam_on =
+//	GPIO_DT_SPEC_GET(BTN_CAM_ON_NODE, gpios);
+//static const struct gpio_dt_spec btn_cam_off =
+//	GPIO_DT_SPEC_GET(BTN_CAM_OFF_NODE, gpios);
 
-static struct gpio_callback btn_cam_on_cb;
-static struct gpio_callback btn_cam_off_cb;
+//* BUTTON1 = SW1 = P1.6
+
+static const struct gpio_dt_spec btn_sw1 =
+		GPIO_DT_SPEC_GET(BTN_SW1_NODE, gpios);
+
+static struct gpio_callback btn_cam_on_cb __attribute__((unused));
+static struct gpio_callback btn_cam_off_cb __attribute__((unused));
+static struct gpio_callback btn_sw1_cb;
 
 /* File d'attente d'actions a traiter en dehors du contexte interruption */
 enum remote_action {
@@ -217,16 +224,17 @@ static void start_discovery(struct bt_conn *conn)
 static void connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err) {
-		LOG_ERR("Connexion echouee (%u)", err);
+		LOG_ERR("Connection failed (%u)", err);
 		gopro_conn = NULL;
 		return;
 	}
 
-	LOG_INF("Connecte a la GoPro");
+	LOG_INF("Connected to  GoPro");
 	gopro_conn = bt_conn_ref(conn);
 
 	/* Demande de securite = bonding (obligatoire pour Open GoPro) */
-	int sec_err = bt_conn_set_security(conn, BT_SECURITY_L2);
+	LOG_INF("security/bonding request L2...");
+	int sec_err = bt_conn_set_security(conn,  BT_SECURITY_L2);
 	if (sec_err) {
 		LOG_ERR("Echec demande de securite/bonding (%d)", sec_err);
 	}
@@ -234,7 +242,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
-	LOG_INF("Deconnecte (raison %u)", reason);
+	LOG_INF("Deconnected (raison %u)", reason);
 	gopro_ready = false;
 	cmd_handle = 0;
 	cmd_rsp_handle = 0;
@@ -248,7 +256,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 			      enum bt_security_err err)
 {
 	if (err) {
-		LOG_ERR("Echec securisation du lien (%d)", err);
+		LOG_ERR("security_changed Error  (%d)", err);
 		return;
 	}
 	LOG_INF("Lien securise (bonding OK), niveau %d - decouverte GATT...", level);
@@ -261,7 +269,7 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.security_changed = security_changed,
 };
 
-/* Une fois GP-0072 ET GP-0073 trouves, on peut s'abonner. On verifie
+/* Une fois GP±-0072 ET GP-0073 trouves, on peut s'abonner. On verifie
  * ca simplement en pollant apres chaque decouverte terminee (cf boucle
  * principale) plutot que par un evenement dedie, pour rester simple. */
 
@@ -284,6 +292,8 @@ static bool ad_has_gopro_service(struct bt_data *data, void *user_data)
 	return true;
 }
 
+static void start_scan(void);
+
 static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 		     struct net_buf_simple *ad)
 {
@@ -299,18 +309,30 @@ static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 		return;
 	}
 
-	LOG_INF("GoPro detectee (RSSI %d), connexion...", rssi);
+	LOG_INF("GoPro detected (RSSI %d), stop scan & connect...", rssi);
 
 	if (bt_le_scan_stop()) {
 		return;
 	}
 
+	// Initiate an LE connection to a remote device.
+
 	struct bt_conn_le_create_param create_param = *BT_CONN_LE_CREATE_PARAM(
 		BT_CONN_LE_OPT_NONE, BT_GAP_SCAN_FAST_INTERVAL,
 		BT_GAP_SCAN_FAST_INTERVAL);
 
-	bt_conn_le_create(addr, &create_param, BT_LE_CONN_PARAM_DEFAULT, &gopro_conn);
+	struct bt_conn *conn = NULL;
+	int err = bt_conn_le_create(addr, &create_param, BT_LE_CONN_PARAM_DEFAULT, &conn);
+	if (err) {
+		LOG_ERR("bt_conn_le_create a echoue (%d)", err);
+		start_scan();
+		return;
+	}
+	/* on relache tout de suite la reference locale : connected()
+	 * prendra SA propre reference si la connexion aboutit */
+	bt_conn_unref(conn);
 }
+
 
 static void start_scan(void)
 {
@@ -323,9 +345,9 @@ static void start_scan(void)
 
 	int err = bt_le_scan_start(&scan_param, scan_cb);
 	if (err) {
-		LOG_ERR("Echec demarrage scan (%d)", err);
+		LOG_ERR("Error BLE scan (%d)", err);
 	} else {
-		LOG_INF("Scan BLE demarre, recherche d'une GoPro...");
+		LOG_INF("Scan BLE started, looking for GoPro...");
 	}
 }
 
@@ -333,6 +355,10 @@ static void start_scan(void)
  * Boutons : ISR -> poste juste un evenement dans la queue, tout le
  * travail (BLE) se fait dans la boucle principale (thread normal).
  * ------------------------------------------------------------------- */
+
+
+static void btn_cam_on_isr(const struct device *dev, struct gpio_callback *cb,
+			    uint32_t pins)  __attribute__((unused));
 static void btn_cam_on_isr(const struct device *dev, struct gpio_callback *cb,
 			    uint32_t pins)
 {
@@ -340,8 +366,8 @@ static void btn_cam_on_isr(const struct device *dev, struct gpio_callback *cb,
 	k_msgq_put(&action_msgq, &a, K_NO_WAIT);
 }
 
-static void btn_cam_off_isr(const struct device *dev, struct gpio_callback *cb,
-			     uint32_t pins)
+static void btn_cam_off_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins) __attribute__((unused));
+static void btn_cam_off_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
 	enum remote_action a = ACTION_CAM_OFF;
 	k_msgq_put(&action_msgq, &a, K_NO_WAIT);
@@ -351,32 +377,95 @@ static int setup_buttons(void)
 {
 	int err;
 
-	if (!gpio_is_ready_dt(&btn_cam_on) || !gpio_is_ready_dt(&btn_cam_off)) {
+	/*if (!gpio_is_ready_dt(&btn_cam_on) || !gpio_is_ready_dt(&btn_cam_off)) {
 		LOG_ERR("GPIO boutons non pretes");
+		return -ENODEV;
+	}*/
+	if (!gpio_is_ready_dt(&btn_sw1)) {
+		LOG_ERR("GPIO boutons not ready");
 		return -ENODEV;
 	}
 
+	/*
 	err = gpio_pin_configure_dt(&btn_cam_on, GPIO_INPUT);
 	err |= gpio_pin_configure_dt(&btn_cam_off, GPIO_INPUT);
 	err |= gpio_pin_interrupt_configure_dt(&btn_cam_on, GPIO_INT_EDGE_TO_ACTIVE);
 	err |= gpio_pin_interrupt_configure_dt(&btn_cam_off, GPIO_INT_EDGE_TO_ACTIVE);
+	*/
+	err = gpio_pin_configure_dt(&btn_sw1, GPIO_INPUT);
+	err |= gpio_pin_interrupt_configure_dt(&btn_sw1, GPIO_INT_EDGE_TO_ACTIVE);
 	if (err) {
 		LOG_ERR("Config GPIO boutons echouee (%d)", err);
 		return err;
 	}
 
+	/*
 	gpio_init_callback(&btn_cam_on_cb, btn_cam_on_isr, BIT(btn_cam_on.pin));
 	gpio_add_callback(btn_cam_on.port, &btn_cam_on_cb);
 
 	gpio_init_callback(&btn_cam_off_cb, btn_cam_off_isr, BIT(btn_cam_off.pin));
 	gpio_add_callback(btn_cam_off.port, &btn_cam_off_cb);
-
+	*/
+	gpio_init_callback(&btn_sw1_cb, btn_cam_on_isr, BIT(btn_sw1.pin));
+	gpio_add_callback(btn_sw1.port, &btn_sw1_cb);	
 	return 0;
 }
 
+
+/* --- Callbacks d'authentification : declare nos capacites IO --- */
+static void auth_cancel(struct bt_conn *conn)
+{
+	LOG_INF("Pairing canceled");
+}
+
+static void pairing_complete(struct bt_conn *conn, bool bonded)
+{
+	LOG_INF("Pairing termine, bonded=%d", bonded);
+}
+
+static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
+{
+	LOG_ERR("Pairing echoue, raison=%d", reason);
+}
+
+
+static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
+{
+	LOG_INF("Passkey affiche (aucun ecran reel) : %06u", passkey);
+}
+
+static void auth_passkey_confirm(struct bt_conn *conn, unsigned int passkey)
+{
+	LOG_INF("Passkey a confirmer : %06u (auto-confirmation)", passkey);
+	bt_conn_auth_passkey_confirm(conn);
+}
+
+static struct bt_conn_auth_cb auth_cb = {
+	.passkey_display = auth_passkey_display,   /* <-- l'ajout manquant */
+	.passkey_confirm = auth_passkey_confirm,   /* <-- ajoute ceci */
+	.cancel = auth_cancel,
+};
+/* NoInputNoOutput -> pairing "Just Works", pas de MITM (pas d'ecran/clavier
+ * sur notre dongle, et la GoPro ne demande qu'une confirmation physique
+ * sur son propre ecran, pas de code a saisir cote client) 
+static struct bt_conn_auth_cb auth_cb = {
+	.cancel = auth_cancel
+};
+*/
+
+static struct bt_conn_auth_info_cb auth_info_cb = {
+	.pairing_complete = pairing_complete,
+	.pairing_failed = pairing_failed,
+};
+
+
 /* -------------------------------------------------------------------
  * main
- * ------------------------------------------------------------------- */
+ * ------------------------------------------------------------------- 
+ * 
+ */
+
+
 int main(void)
 {
 	int err;
@@ -395,8 +484,25 @@ int main(void)
 	}
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
-		settings_load(); /* recharge les cles de bonding sauvegardees */
+		if ((1) ) {
+			LOG_INF("+++ load settings");
+			settings_load(); /* recharge les cles de bonding sauvegardees */
+		} else {
+			LOG_INF("+++ load settings disabled");
+		}
+		
 	}
+
+	err = bt_conn_auth_cb_register(&auth_cb);
+	if (err) {
+		LOG_ERR("bt_conn_auth_cb_register a echoue (%d)", err);
+	}
+	LOG_INF("+++ register auth_cb");
+	err = bt_conn_auth_info_cb_register(&auth_info_cb);
+	if (err) {
+		LOG_ERR("bt_conn_auth_info_cb_register a echoue (%d)", err);
+	}
+
 
 	start_scan();
 

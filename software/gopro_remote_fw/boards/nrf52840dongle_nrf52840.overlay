@@ -27,6 +27,11 @@
 			gpios = <&gpio0 15 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "Camera OFF";
 		};
+		/* BUTTON1 = SW1 = P1.6 */
+		button_sw1: button_sw1 {
+			gpios = <&gpio0 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "SW1";
+		};
 
 		/* A ajouter plus tard, une fois les 3 boutons Garmin cables :
 		 * button_page_r, button_page_l, button_lap
@@ -36,5 +41,6 @@
 	aliases {
 		sw-cam-on = &button_cam_on;
 		sw-cam-off = &button_cam_off;
+		sw1 = &button_sw1;
 	};
 };
