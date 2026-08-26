@@ -603,6 +603,29 @@ differently-named API surface that's easy to confuse with the Zephyr one.
   manifest wasn't confirmed — `sdk-ant`'s own `west.yml` isn't visible
   without Adopter+GitHub access.
   [Getting Started](https://ant-nrfconnect.github.io/doc/getting_started.html)
+  — **corroborated from the other direction**: `nrfconnect/sdk-nrf`'s own
+  `west.yml` (public, checked directly on both `main` and the `v2.9.2`
+  tag) contains **zero** reference to `ant-nrfconnect`/`sdk-ant`/ANT+ of
+  any kind. This project's existing BLE firmware manifest has nothing to
+  hook into for ANT+ — a separate workspace really is required, not just
+  an undocumented option. Nordic's own SDK docs agree: current
+  `nrfconnectdocs.nordicsemi.com` protocol-support pages for the nRF52
+  don't mention ANT/ANT+ at all (an older v2.4.4 doc page went further,
+  stating outright *"the nRF Connect SDK does not support ANT"* — true
+  for that version, superseded by the separate `sdk-ant` add-on since).
+  ANT+ support genuinely lives entirely outside `sdk-nrf`'s own tree.
+- **No public mirror or cache of `sdk-ant` exists** either: direct,
+  unauthenticated fetches (not archive/cache lookups) to both
+  `github.com/ant-nrfconnect/sdk-ant` and the GitHub API for that repo
+  return HTTP 404. The access gate is real, not just under-documented.
+- **A closer-fit reference sample, once access is available**:
+  `ant_broadcast_tx`/`ant_broadcast_rx` (plain ANT+ broadcast, no BLE
+  relay) is a better template for this project's needs than the
+  BLE+ANT+ HRM relay sample cited above — both are only described in the
+  docs (page/parameter tables), not with embedded source, but both
+  explicitly list `nrf52dk/nrf52832` as a supported board target
+  alongside nrf52840dk/nrf5340dk, reinforcing that the nRF52832 is
+  first-class, not an edge case, across multiple samples.
 - **Kconfig**: top-level enable is `CONFIG_ANT`. For single-core chips
   (nRF52832 and nRF52840, both used here) `CONFIG_ANT_LIBRARY_CORE`
   applies (the nRF5340's dual-core split instead uses
@@ -692,7 +715,13 @@ Do not mix the two up if ever cross-referencing nRF5 SDK sample code.
 - How `sdk-ant`'s own west manifest actually composes with an *existing*
   application's manifest (this project's) — only the "fresh workspace
   init" flow is publicly documented; the repo's own `west.yml` isn't
-  visible without Adopter + GitHub org access.
+  visible without Adopter + GitHub org access. Corroborated as a real gap
+  (not just under-documented): `nrfconnect/sdk-nrf`'s own public `west.yml`
+  has no ANT+ reference at all, and no public mirror/cache of `sdk-ant`
+  could be found (direct 404s on both the GitHub page and API,
+  double-checked with no archived/cached sources used per user
+  instruction) — so this remains genuinely unknown until someone with
+  Adopter + GitHub access actually looks.
 - Whether ANT+ Adopter GitHub org access has any review/wait time after
   signup, and the exact steps once granted.
 - If a future nRF52840-specific board is added later: whether an
