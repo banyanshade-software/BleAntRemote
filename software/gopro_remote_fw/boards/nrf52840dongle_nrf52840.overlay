@@ -26,9 +26,9 @@
 			gpios = <&gpio0 15 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "Camera OFF";
 		};
-		/* BUTTON1 = SW1 = P1.6 */
+		/* BUTTON1 = SW1 = P1.06 (matches Zephyr's built-in sw0/button0 for this board) */
 		button_sw1: button_sw1 {
-			gpios = <&gpio0 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			gpios = <&gpio1 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "SW1";
 		};
 

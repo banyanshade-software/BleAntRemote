@@ -93,6 +93,7 @@ static struct gpio_callback btn_sw1_cb;
 enum remote_action {
 	ACTION_CAM_ON,
 	ACTION_CAM_OFF,
+	ACTION_BTN_SW1
 };
 
 K_MSGQ_DEFINE(action_msgq, sizeof(enum remote_action), 8, 4);
@@ -101,11 +102,22 @@ K_MSGQ_DEFINE(action_msgq, sizeof(enum remote_action), 8, 4);
  * Buttons : ISR -> just posts an event to the queue, all the (BLE)
  * work happens in the main loop (normal thread).
  * ------------------------------------------------------------------- */
+
+ static void btn_sw1_isr(const struct device *dev, struct gpio_callback *cb,
+			    uint32_t pins)
+{
+	LOG_INF("Button SW1 pressed (GPIO %d)", pins);
+	enum remote_action a = ACTION_BTN_SW1;
+	k_msgq_put(&action_msgq, &a, K_NO_WAIT);
+}
+
+
 static void btn_cam_on_isr(const struct device *dev, struct gpio_callback *cb,
 			    uint32_t pins)  __attribute__((unused));
 static void btn_cam_on_isr(const struct device *dev, struct gpio_callback *cb,
 			    uint32_t pins)
 {
+	LOG_INF("Button on pressed (GPIO %d)", pins);
 	enum remote_action a = ACTION_CAM_ON;
 	k_msgq_put(&action_msgq, &a, K_NO_WAIT);
 }
@@ -113,6 +125,7 @@ static void btn_cam_on_isr(const struct device *dev, struct gpio_callback *cb,
 static void btn_cam_off_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins) __attribute__((unused));
 static void btn_cam_off_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
+	LOG_INF("Button off pressed (GPIO %d)", pins);
 	enum remote_action a = ACTION_CAM_OFF;
 	k_msgq_put(&action_msgq, &a, K_NO_WAIT);
 }
@@ -150,7 +163,7 @@ static int setup_buttons(void)
 	gpio_init_callback(&btn_cam_off_cb, btn_cam_off_isr, BIT(btn_cam_off.pin));
 	gpio_add_callback(btn_cam_off.port, &btn_cam_off_cb);
 	*/
-	gpio_init_callback(&btn_sw1_cb, btn_cam_on_isr, BIT(btn_sw1.pin));
+	gpio_init_callback(&btn_sw1_cb, btn_sw1_isr, BIT(btn_sw1.pin));
 	gpio_add_callback(btn_sw1.port, &btn_sw1_cb);
 	return 0;
 }
@@ -195,6 +208,10 @@ int main(void)
 		ant_garmin_note_activity();
 
 		switch (action) {
+		case ACTION_BTN_SW1:
+			LOG_INF("Button SW1 pressed");
+			ble_gopro_send_shutter(true);
+			break;
 		case ACTION_CAM_ON:
 			LOG_INF("Camera ON button pressed");
 			ble_gopro_send_shutter(true);
