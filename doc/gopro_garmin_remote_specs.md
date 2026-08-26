@@ -22,7 +22,7 @@ Compact housing mounted on the handlebar, allowing remote control of:
 Each button triggers an independent, immediate action (no mode/menu to navigate).
 
 ### Thermometer (ANT+ broadcast)
-- Ambient/chip temperature is measured using the **nRF52832's built-in die
+- Ambient/chip temperature is measured using the **nRF52's built-in die
   temperature sensor** — no external thermistor. This replaces the earlier
   "external NTC thermistor" plan.
 - The reading is **broadcast over ANT+** (the same radio/link already used
@@ -51,11 +51,12 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
 - The device must be **configurable from a companion mobile app** (iOS/Android),
   for example to remap buttons, adjust behavior, or check battery/status.
 - **Transport protocol: to be defined.** BLE is the natural default since the
-  nRF52832 already runs a BLE stack for the GoPro link and BLE is required for
-  iOS compatibility (classic Bluetooth is not supported by this chip and is
-  not usable from iOS apps). "Classic Bluetooth" is listed as an alternative
-  only in case a future MCU/radio choice made it relevant; no decision is
-  needed there today given the confirmed nRF52832 choice.
+  nRF52 (nRF52840, see "MCU / radio") already runs a BLE stack for the
+  GoPro link and BLE is required for iOS compatibility (classic Bluetooth
+  is not supported by this chip family and is not usable from iOS apps).
+  "Classic Bluetooth" is listed as an alternative only in case a future
+  MCU/radio choice made it relevant; no decision is needed there given the
+  nRF52 choice (true for either the nRF52832 or nRF52840).
 - Expected approach (draft, see "Technical specifications" below): a
   dedicated BLE **Configuration Service** (custom GATT service), separate
   from the Open GoPro command exchange, exposed while the device advertises
@@ -128,19 +129,33 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
   button combo or a magnetic/reed switch, to be defined), not continuously.
 
 ### MCU / radio
-- **Nordic nRF52832** (Ebyte E73-2G4M08S1E module) — Cortex-M4F, 512KB flash / 64KB RAM.
-- Chosen because the *silicon* natively supports both **BLE and ANT+** on
-  the same radio, and because it is the only chip successfully tested in
-  practice for BLE pairing with a GoPro (unlike the ESP32).
+- **DECISION UPDATE**: the MCU target is changing from the **nRF52832**
+  (Ebyte E73-2G4M08S1E module, used in the design up to this point) to the
+  **nRF52840** — see "ANT+ implementation notes" at the end of this
+  document for why. Both natively support BLE and ANT+ on the same radio
+  silicon; the nRF52832 just isn't supported by Nordic's Zephyr-based
+  ANT+ add-on today, while the nRF52840 is.
+- **Why nRF52840 over nRF5340** (the add-on's other supported chip):
+  the nRF52840 is a direct family relative of the nRF52832 — same
+  single-core Cortex-M4F architecture, same general peripheral set, just
+  more flash/RAM (1MB/256KB vs. 512KB/64KB) and native USB device
+  support. The nRF5340 is a fundamentally different, dual-core chip
+  (separate Cortex-M33 application + network cores with inter-core IPC,
+  TrustZone) — a much bigger firmware architecture change than this
+  project needs. The nRF52840 also happens to be the chip on the
+  **nRF52840 Dongle (PCA10059)** already used in this project for BLE
+  prototyping (see `boards/nrf52840dongle_nrf52840.overlay`) — so no
+  change to the existing `west build -b nrf52840dongle_nrf52840`
+  prototyping workflow is needed; only the final custom PCB (currently
+  designed around the E73-2G4M08S1E) needs to move to an nRF52840-based
+  module. That module choice is not sourced yet — see "Open points".
 - Software stack: **nRF Connect SDK (Zephyr)**, low-level C development,
-  for the BLE side (already implemented, see `ble_gopro.c`). **This does
-  not currently extend to ANT+ on this specific chip** — see "ANT+
-  implementation notes" at the end of this document: Nordic's Zephyr-based
-  ANT+ add-on only supports the nRF52840/nRF5340 today, not the nRF52832
-  used here. ANT+ on the nRF52832 requires the older, separate **nRF5
-  SDK** (non-Zephyr) instead. This is an open toolchain/architecture
-  decision, not yet resolved — see the implementation notes for the
-  options being considered.
+  for both BLE (already implemented, see `ble_gopro.c`) and — once the
+  build integration below is done — ANT+. See "ANT+ implementation
+  notes" for the concrete integration steps and what's still unverified
+  (in particular, whether concurrent BLE+ANT+ from one Zephyr firmware on
+  the nRF52840 is actually demonstrated anywhere, which this project
+  needs since it already uses BLE for the GoPro).
 
 ### Buttons & wake-up
 - 5 touch buttons, individual GPIOs (no matrix), internal pull-up, active-low logic.
@@ -262,7 +277,7 @@ is officially named **Environment**, not "Environment Sensor."
   *central* (it connects out to the GoPro); a configuration session with a
   mobile app requires the device to act as a BLE *peripheral* (the phone
   connects to it) and advertise a custom **Configuration Service** UUID.
-  The nRF52832/Zephyr BLE stack supports multi-role operation, but the
+  The nRF52/Zephyr BLE stack supports multi-role operation, but the
   current firmware (`software/gopro_remote_fw/src/ble_gopro.c`) only
   implements the central role — adding the peripheral/config role (likely
   as its own module, e.g. `ble_config.[ch]`, per the modularity requirement
@@ -290,7 +305,7 @@ is officially named **Environment**, not "Environment Sensor."
   VDD channel — no additional component required.
 
 ### Internal temperature sensor
-- Uses the **nRF52832's built-in die temperature sensor** peripheral (a
+- Uses the **nRF52's built-in die temperature sensor** peripheral (a
   dedicated TEMP peripheral, separate from the SAADC used for battery
   measurement above) — no external thermistor, no extra ADC input, no
   additional BOM component.
@@ -307,19 +322,26 @@ is officially named **Environment**, not "Environment Sensor."
   not continuously, to preserve battery life.
 
 ### PCB
-- Based on the **Ebyte E73-2G4M08S1E** module (18.0 x 13.0mm, 43-pin
-  castellated package).
-- Footprint with **extended pads** (tabs protruding outward from the module)
-  to allow hand soldering with an iron, without a reflow oven.
+- **Needs rework**: previously based on the **Ebyte E73-2G4M08S1E** module
+  (nRF52832, 18.0 x 13.0mm, 43-pin castellated package, extended-pad
+  hand-solder footprint). Following the nRF52840 chip decision above, this
+  schematic/footprint needs to move to an nRF52840-based module — not yet
+  sourced/chosen (nRF52840 has more GPIOs and a different pinout than the
+  nRF52832, so this is not a drop-in footprint swap). See "Open points".
 - Programming/debug via **SWD** (SWDIO/SWCLK/GND/VDD pins on a header or
-  dedicated pads).
+  dedicated pads) — expected to carry over regardless of module choice.
 
 ### Development tooling
 - Programming probe: **J-Link EDU Mini** (non-commercial use), alternative
   possible with an **ST-Link V2** driven via OpenOCD (not ST-Link V3, which
   is restricted to ST chips).
-- Recommended prototyping board before the final PCB: **nRF52-DK**
-  (integrated debugger, ready-to-use Zephyr examples).
+- Recommended prototyping board before the final PCB: **nRF52840-DK**
+  (integrated debugger, ready-to-use Zephyr examples) — updated from the
+  nRF52832-based **nRF52-DK** following the chip decision above. The
+  **nRF52840 Dongle (PCA10059)** already used for BLE bring-up in this
+  project (see `boards/nrf52840dongle_nrf52840.overlay`) remains usable
+  too, but has no on-board debugger (USB DFU flashing only, see the
+  firmware README).
 
 ---
 
@@ -327,7 +349,7 @@ is officially named **Environment**, not "Environment Sensor."
 
 | Ref. | Component | Qty | Role | Notes |
 |------|-----------|----------|------|-----------|
-| U1 | **Ebyte E73-2G4M08S1E** module (nRF52832) | 1 | MCU + BLE/ANT+ radio | Castellated package, extended-pad footprint |
+| U1 | nRF52840 module — **not yet sourced/chosen** | 1 | MCU + BLE/ANT+ radio | Replaces the previous Ebyte E73-2G4M08S1E (nRF52832); see "Open points" |
 | BT1 | **CR2032** coin cell + holder | 1 | Power supply | Direct supply, no regulator |
 | SW1–SW5 | Push buttons (tact switch) | 5 | Camera ON, Camera OFF, Page right, Page left, Lap | GPIO pull-up, active-low |
 | C1 | **Tantalum/polymer 47–100µF** capacitor, 0805/1206 package | 1 | Voltage-drop buffer (radio current spikes) | Low ESR required |
@@ -337,7 +359,7 @@ is officially named **Environment**, not "Environment Sensor."
 | — | Enclosure (3D printed or other) | 1 | Protection/handlebar mount | To be defined (sealing to be planned) |
 
 > Note: no thermistor (NTC) or divider resistor is needed — ambient
-> temperature is read from the nRF52832's internal die temperature sensor
+> temperature is read from the nRF52's internal die temperature sensor
 > (see "Internal temperature sensor" above). The earlier NTC1/R1 BOM lines
 > from previous revisions of this document have been removed.
 
@@ -351,14 +373,17 @@ is officially named **Environment**, not "Environment Sensor."
 
 ## 4. Open points / to be decided
 
-- **ANT+ toolchain/chip decision (blocking, see "ANT+ implementation
-  notes" at the end of this document)**: the nRF52832 used in this
-  project is not currently supported by Nordic's Zephyr-based ANT+
-  add-on (only nRF52840/nRF5340 are) — real ANT+ code cannot be written
-  against the existing Zephyr firmware as-is. Needs a decision between
-  porting to the classic nRF5 SDK on the current chip, moving to a
-  supported chip (nRF52840/nRF5340, a hardware change), or reconsidering
-  ANT+ entirely, before any further ANT+ implementation work.
+- **nRF52840 module sourcing & PCB rework** (decided to move off nRF52832,
+  see "ANT+ implementation notes"): no specific nRF52840 module has been
+  chosen yet to replace the Ebyte E73-2G4M08S1E in the KiCad design; the
+  nRF52840 has more GPIOs and a different pinout, so this isn't a simple
+  footprint swap. Schematic/PCB rework is needed once a module is picked.
+- **ANT+ build integration (nRF52840)**: the exact `west.yml` manifest
+  changes and Kconfig symbols needed to pull in Nordic's `sdk-ant` add-on
+  and enable it in this project's `prj.conf`, and confirmation that
+  concurrent BLE+ANT+ from one Zephyr firmware is actually supported on
+  the nRF52840 (this project needs both at once), are not verified yet —
+  see "ANT+ implementation notes".
 - **Mobile app configuration transport**: confirm BLE (vs. "classic
   Bluetooth", listed only as a placeholder — see "Remote configuration"
   above) and define the Configuration Service (session trigger, exposed
@@ -562,29 +587,32 @@ nRF Connect SDK" (new, Zephyr, currently nRF52840/nRF5340-only)** — and
 this project's existing Zephyr BLE firmware cannot pull in ANT+ on its
 current chip without either changing chip or splitting the toolchain.
 
-### Options going forward (not yet decided)
-1. **Port to the classic nRF5 SDK for the ANT+ side, on the current
-   nRF52832.** Likely means either a second, separate firmware
-   image/toolchain alongside the existing Zephyr one (nRF5 SDK doesn't
-   use `west`/CMake), or migrating the whole project off Zephyr onto nRF5
-   SDK — which would mean redoing the BLE (`ble_gopro.c`) and sensor
-   (`temp_sensor.c`) code against a different set of APIs, losing the
-   Zephyr-specific work already done.
-2. **Move the target chip to nRF52840 or nRF5340**, both supported by the
-   Zephyr ANT+ add-on today. Keeps one unified Zephyr toolchain — the
-   existing `ble_gopro.c`/`ant_garmin.c`/`temp_sensor.c` structure would
-   mostly carry over, adding `ant_*` calls (see API surface below) instead
-   of a second toolchain. This is a **hardware change**: new module
-   footprint/pinout, KiCad schematic/PCB rework — the current design is
-   built around the E73-2G4M08S1E (nRF52832).
-3. **Reconsider whether ANT+ is required at all** for the Garmin side, e.g.
-   evaluate what BLE-based remote-control capability (if any) current
-   Garmin Edge firmware supports as an alternative. Not researched yet —
-   flagged as a question, not a verified option.
+### Options considered, and the decision
 
-No option has been chosen. This needs a decision before any real
-`sd_ant_*`/`ant_*` calls are written into `ant_garmin.c` — writing code
-against the wrong toolchain would be wasted or actively misleading work.
+1. ~~Port to the classic nRF5 SDK for the ANT+ side, on the current
+   nRF52832.~~ Not chosen — would mean either a second, separate firmware
+   image/toolchain alongside the existing Zephyr one (nRF5 SDK doesn't use
+   `west`/CMake), or migrating the whole project off Zephyr, losing the
+   Zephyr-specific work already done in `ble_gopro.c`/`temp_sensor.c`.
+2. **CHOSEN: move the target chip to the nRF52840**, supported by the
+   Zephyr ANT+ add-on today. Keeps one unified Zephyr toolchain — the
+   existing `ble_gopro.c`/`ant_garmin.c`/`temp_sensor.c` structure carries
+   over, adding `ant_*` calls (see API surface below) instead of a second
+   toolchain. Chosen over the nRF5340 (the add-on's other supported chip)
+   for architectural continuity — see "MCU / radio" above for the
+   reasoning. This **is** a hardware change: new module, PCB/footprint
+   rework — tracked in "Open points" below, not yet done.
+3. ~~Reconsider whether ANT+ is required at all~~ Not chosen — not
+   researched, and the user's direction was to keep ANT+ and resolve the
+   chip/toolchain gap instead.
+
+**Still open, now that the chip decision is made** (see "Open points"):
+sourcing a specific nRF52840 module for the PCB; the concrete west
+manifest / Kconfig steps to pull in `sdk-ant` and enable it alongside the
+existing Zephyr BLE host; and confirming that concurrent BLE+ANT+ from one
+Zephyr firmware is actually supported on the nRF52840 (this project needs
+both, since GoPro control stays on BLE) — none of this was verified in the
+research behind this section yet.
 
 ### Licensing & cost (confirmed)
 - A free **"ANT+ Adopter"** signup at thisisant.com grants the ANT+

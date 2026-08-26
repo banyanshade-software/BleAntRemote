@@ -11,6 +11,25 @@
   the extended-pad template (hand soldering) seen previously, referenced by U1.
 - **PCB**: not generated yet (see "Next steps").
 
+## ⚠️ Out of sync with recent firmware/spec decisions
+This KiCad project (schematic + footprint below) has **not been updated
+yet** to reflect two decisions made since it was last generated — treat
+the schematic below as describing the *previous* design, not the current
+target, until someone does this rework:
+1. **MCU change**: the design moved from the **nRF52832** (E73-2G4M08S1E,
+   U1 below) to the **nRF52840**, because the nRF52832 isn't supported by
+   Nordic's Zephyr-based ANT+ add-on. No replacement nRF52840 module has
+   been chosen yet, and the nRF52840 has a different pinout (more GPIOs)
+   than the nRF52832, so this is not a simple part swap — it needs a new
+   symbol/footprint and pin re-mapping. See
+   `doc/gopro_garmin_remote_specs.md`, "ANT+ implementation notes".
+2. **Thermistor removed**: `NTC1`/`R1` (and the `NTC_SENSE` net) below are
+   from an earlier design that used an external NTC thermistor for
+   temperature. That was replaced by the nRF52's internal die temperature
+   sensor (no external component) — see the specs doc, "Internal
+   temperature sensor". `NTC1`, `R1`, and `NTC_SENSE` should be removed
+   from the schematic during the MCU rework above.
+
 ## Schematic components
 
 | Ref. | Description | Connected nets |
@@ -42,12 +61,17 @@
 
 ## Suggested next steps
 
-1. Open `gopro_garmin_remote.kicad_pro` in KiCad 7+, review the schematic on
+1. Source an nRF52840 module and get/create its KiCad symbol + footprint;
+   replace U1 (currently E73-2G4M08S1E) and re-map pins for
+   `GPIO_CAM_ON/OFF`, `GPIO_PAGE_R/L`, `GPIO_LAP`, `SWDIO`/`SWCLK`.
+2. Remove `NTC1`, `R1`, and the `NTC_SENSE` net (superseded by the
+   internal temperature sensor — see above).
+3. Open `gopro_garmin_remote.kicad_pro` in KiCad 7+, review the schematic on
    screen, rearrange if needed.
-2. Complete the real E73 pinout (symbol + footprint).
-3. Switch to PCB mode (`Tools > Update PCB from Schematic`), place the
+4. Complete the real module pinout (symbol + footprint) once chosen.
+5. Switch to PCB mode (`Tools > Update PCB from Schematic`), place the
    components, route the traces.
-4. Add the enclosure outline / mounting holes based on the chosen handlebar
+6. Add the enclosure outline / mounting holes based on the chosen handlebar
    mount.
 
 ## Tools used to generate this project

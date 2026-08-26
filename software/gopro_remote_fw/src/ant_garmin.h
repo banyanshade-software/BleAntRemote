@@ -25,23 +25,24 @@
  * implies (the MCU can no longer use full System OFF sleep for the
  * duration of an active session).
  *
- * NOT IMPLEMENTED YET (ANT+ transmission itself), and currently BLOCKED
- * on a toolchain/chip decision, not just a licensing step: the nRF52832
- * used in this project is not supported by Nordic's Zephyr-based ANT+
- * add-on (only nRF52840/nRF5340 are, as of the research behind this
- * comment) - ANT+ on this chip needs the older, separate nRF5 SDK
- * (S212/S332 SoftDevice), a different toolchain from the Zephyr one this
- * file and the rest of this firmware are built on. See
- * doc/gopro_garmin_remote_specs.md, "ANT+ implementation notes" for the
- * full finding, sources, licensing process, and the options being
- * weighed (port to nRF5 SDK / change chip / reconsider ANT+). Do not add
- * real `sd_ant_*`/`ant_*` calls here until that's decided - the two
- * toolchains use differently-named, non-interchangeable APIs.
+ * NOT IMPLEMENTED YET (ANT+ transmission itself). The original target
+ * chip, the nRF52832, is not supported by Nordic's Zephyr-based ANT+
+ * add-on (only nRF52840/nRF5340 are) - the project has since decided to
+ * move the MCU target to the **nRF52840** specifically to keep one
+ * unified Zephyr toolchain instead of adding a second (non-Zephyr) one.
+ * See doc/gopro_garmin_remote_specs.md, "ANT+ implementation notes" for
+ * the full finding, sources, licensing process, and what's still open
+ * (nRF52840 module sourcing, the exact west-manifest/Kconfig steps to
+ * pull in the `sdk-ant` add-on, and confirming concurrent BLE+ANT+ is
+ * actually supported on the nRF52840 - not yet verified). Do not add
+ * real `ant_*` calls here until that verification is done - writing them
+ * against unconfirmed build integration risks code that looks real but
+ * doesn't build or doesn't coexist with the existing BLE host.
  *
  * The session timers below already run and call into temp_sensor.h; only
  * the actual radio transmission is a stub (it just logs a warning), so
  * the main FSM (main.c) and the timing behavior can be exercised
- * independently of that decision.
+ * independently of that work.
  */
 #ifndef ANT_GARMIN_H_
 #define ANT_GARMIN_H_
