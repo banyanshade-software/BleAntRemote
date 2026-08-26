@@ -306,3 +306,123 @@ ANT+ is used for two purposes, both from the same radio/module:
   periodic ANT+ TX) is not yet characterized.
 - **Internal sensor accuracy**: die temperature vs. true ambient
   temperature offset/calibration to be validated on real hardware.
+
+---
+
+## 5. Zephyr API reference (for readers coming from another RTOS)
+
+This firmware is built on the **nRF Connect SDK**, whose RTOS layer is
+**Zephyr**. If you're used to FreeRTOS (or a vendor SDK built on it, like
+ESP-IDF), most of what you'll read in `software/gopro_remote_fw/src/` maps
+onto familiar concepts, but the names and a few semantics differ. This
+section lists every Zephyr call/macro actually used in this codebase,
+grouped by purpose, with the closest FreeRTOS analogue where one exists.
+It's a project-specific cheat sheet, not a full Zephyr tutorial.
+
+### Two build-time concepts with no FreeRTOS equivalent
+FreeRTOS is just a scheduler — pin numbers, peripheral init, and feature
+flags are usually hardcoded `#define`s or a vendor HAL config file. Zephyr
+splits that into two separate systems, both of which show up before you
+even get to runtime API calls:
+
+- **Kconfig** (`prj.conf`): build-time feature flags, e.g. `CONFIG_BT=y`,
+  `CONFIG_GPIO=y`. Roughly like enabling modules/`menuconfig` options in
+  ESP-IDF; FreeRTOS itself has no equivalent (`FreeRTOSConfig.h` is the
+  closest thing, but it only configures the kernel, not drivers/subsystems).
+- **Devicetree** (`boards/nrf52840dongle_nrf52840.overlay`): a hardware
+  description (which pins, which peripherals) compiled separately from your
+  C code, then queried from C via macros like `DT_ALIAS()` / `DT_NODELABEL()`
+  (see "Devicetree & device model" below). Comparable to a board support
+  package's pin/peripheral table, but resolved at build time from a
+  dedicated `.overlay`/`.dts` file instead of being hand-written `#define`s.
+
+### Kernel primitives (`<zephyr/kernel.h>`)
+
+| Zephyr | What it does here | Used in | FreeRTOS analogue |
+|---|---|---|---|
+| `K_MSGQ_DEFINE(name, size, count, align)` | Statically declares a fixed-size message queue (no heap allocation). | `main.c` — `action_msgq`, carries button-press events out of ISR context | `xQueueCreate()` — but Zephyr's `_DEFINE` macros allocate the object statically at compile time by default, closer to FreeRTOS's `xQueueCreateStatic()` than to the heap-allocating call |
+| `k_msgq_put(&q, &item, timeout)` | Enqueues one item. | `main.c` button ISRs (`btn_cam_on_isr`, `btn_cam_off_isr`), called with `K_NO_WAIT` since it must not block in ISR context | `xQueueSendFromISR()` |
+| `k_msgq_get(&q, &item, timeout)` | Blocks (up to `timeout`) waiting for an item. | `main.c` main loop, called with `K_FOREVER` | `xQueueReceive()` |
+| `K_TIMER_DEFINE(name, expiry_fn, stop_fn)` | Statically declares a software timer. | `ant_garmin.c` — `temp_broadcast_timer` (periodic), `temp_session_timer` (one-shot) | `xTimerCreate()` (again, static by default rather than heap-allocated) |
+| `k_timer_start(&t, duration, period)` | (Re)arms a timer: fires once after `duration`, then every `period` (or once only if `period` is `K_NO_WAIT`). Safe to call on an already-running timer to reschedule it. | `ant_garmin_note_activity()` | `xTimerStart()` / `xTimerChangePeriod()` |
+| `k_timer_stop(&t)` | Cancels a running timer. | `temp_session_timer_expiry()`, to end the broadcast session | `xTimerStop()` |
+| **Timer expiry context — important difference** | A `k_timer`'s `expiry_fn` runs **in ISR context** (the system clock interrupt), always — there is no separate "timer task". | Why `temp_broadcast_timer_expiry()` only calls `k_work_submit()` instead of doing the sensor read/broadcast directly | FreeRTOS timer callbacks run in the **Timer Daemon task** (a real task, not an ISR) — so blocking-unsafe code in a Zephyr timer callback is a correctness bug, not just bad practice, in a way it wouldn't automatically be in FreeRTOS |
+| `K_WORK_DEFINE(name, handler)` | Statically declares a work item bound to the system workqueue. | `ant_garmin.c` — `temp_broadcast_work` | No first-class equivalent; you'd typically hand-roll this in FreeRTOS as "ISR posts to a queue, a dedicated task drains it" (exactly the pattern this project's own `action_msgq` uses for buttons) |
+| `k_work_submit(&work)` | Schedules a work item to run (soon) on the system workqueue thread — safe to call from ISR context. | `temp_broadcast_timer_expiry()` | Closest is `xQueueSendFromISR()` to a queue that a worker task reads, or `xTimerPendFunctionCallFromISR()` |
+| `K_NO_WAIT`, `K_FOREVER`, `K_MSEC(n)`, `K_MINUTES(n)` | Timeout/duration values used across the calls above. | Throughout | `0` / `portMAX_DELAY` / `pdMS_TO_TICKS(n)` — Zephyr timeouts are typed (`k_timeout_t`) and unit-named instead of raw tick counts |
+
+### Devicetree & device model (`<zephyr/devicetree.h>`, `<zephyr/device.h>`)
+
+| Zephyr | What it does here | Used in |
+|---|---|---|
+| `DT_ALIAS(name)` | Resolves a devicetree alias (defined in the `.overlay`, e.g. `sw1`) to a node identifier at build time. | `main.c` — `BTN_SW1_NODE`, etc. |
+| `DT_NODELABEL(name)` | Resolves a devicetree node by its label (e.g. `temp`) instead of an alias. | `temp_sensor.c` |
+| `GPIO_DT_SPEC_GET(node, prop)` | Builds a `struct gpio_dt_spec` (port + pin + flags) from devicetree data, at compile time. | `main.c` — `btn_sw1` |
+| `DEVICE_DT_GET_OR_NULL(node)` | Gets a `const struct device *` handle for a devicetree node, or `NULL` if it doesn't exist/isn't enabled. | `temp_sensor.c` — `temp_dev` |
+| `device_is_ready(dev)` | Checks a driver finished initializing successfully before using it — Zephyr's device model always requires this check. | `temp_sensor_init()` |
+
+There's no direct FreeRTOS equivalent for this group — FreeRTOS has no
+device driver model of its own; you'd normally call a vendor HAL's
+`_Init()`/`_IsReady()` function directly instead of going through a
+generic `struct device`.
+
+### GPIO (`<zephyr/drivers/gpio.h>`)
+
+| Zephyr | What it does here | Used in |
+|---|---|---|
+| `gpio_is_ready_dt(&spec)` | Readiness check for a `gpio_dt_spec` (built on `device_is_ready()` above). | `setup_buttons()` |
+| `gpio_pin_configure_dt(&spec, flags)` | Configures a pin's direction/pull per its devicetree flags. | `setup_buttons()` |
+| `gpio_pin_interrupt_configure_dt(&spec, trigger)` | Arms a GPIO interrupt (here, `GPIO_INT_EDGE_TO_ACTIVE`). | `setup_buttons()` |
+| `gpio_init_callback(&cb, handler, pin_mask)` + `gpio_add_callback(port, &cb)` | Registers an ISR-context callback for one or more pins on a port. | `setup_buttons()` |
+
+Conceptually the same as registering a GPIO/EXTI interrupt handler with a
+vendor HAL (e.g. `HAL_GPIO_EXTI_Callback()` on STM32, `gpio_isr_handler_add()`
+on ESP-IDF) — Zephyr just standardizes the registration API across chips.
+
+### Logging (`<zephyr/logging/log.h>`)
+
+| Zephyr | What it does here |
+|---|---|
+| `LOG_MODULE_REGISTER(name, level)` | Declares a named log source with a default level, once per file (see the top of each `.c` file here). |
+| `LOG_INF(...)`, `LOG_WRN(...)`, `LOG_ERR(...)`, `LOG_HEXDUMP_INF(...)` | `printf`-style logging at increasing severity, routed through Zephyr's logging subsystem (here, out over USB CDC-ACM — see `prj.conf`'s `CONFIG_LOG`). |
+
+FreeRTOS has no built-in logging subsystem; projects typically wrap
+`printf`/UART writes themselves. Zephyr's logging adds per-module levels,
+optional deferred/async processing, and multiple backends (UART, USB,
+RTT, …) for free.
+
+### Sensor driver API (`<zephyr/drivers/sensor.h>`)
+
+| Zephyr | What it does here | Used in |
+|---|---|---|
+| `sensor_sample_fetch(dev)` | Triggers a fresh reading from the device. | `temp_sensor_read()` |
+| `sensor_channel_get(dev, channel, &val)` | Reads one channel (here, `SENSOR_CHAN_DIE_TEMP`) from the last-fetched sample, as a `struct sensor_value` (integer + micro-fraction pair, to avoid requiring float). | `temp_sensor_read()` |
+
+This is Zephyr's generic sensor abstraction — the same two calls work for
+any Zephyr-supported sensor (accelerometer, humidity, etc.), not just this
+one. FreeRTOS has no equivalent; you'd call a specific sensor driver's own
+read function directly.
+
+### Settings / persistent storage (`<zephyr/settings/settings.h>`)
+
+| Zephyr | What it does here | Used in |
+|---|---|---|
+| `settings_load()` | Loads all registered persistent key-value settings from flash (here, BLE bonding keys) back into RAM at boot. | `ble_gopro_init()` |
+
+Comparable to calling a vendor NVS/EEPROM-emulation library's "load"
+function yourself (e.g. ESP-IDF's `nvs_get_*()`) — Zephyr's settings
+subsystem is that pattern formalized and wired directly into the
+Bluetooth stack's bonding storage.
+
+### Bluetooth LE host API (`<zephyr/bluetooth/*.h>`)
+`bt_enable()`, `bt_conn_*()` (`BT_CONN_CB_DEFINE`, `bt_conn_set_security`,
+`bt_conn_ref`/`unref`, `bt_conn_auth_cb_register`, …), `bt_gatt_*()`
+(`bt_gatt_discover`, `bt_gatt_subscribe`, `bt_gatt_write_without_response`),
+`bt_le_scan_start`/`stop`, `bt_data_parse` — all used in `ble_gopro.c`.
+
+These aren't a general-RTOS concept, so there isn't a FreeRTOS analogue as
+such: FreeRTOS itself has no built-in BLE stack. The closest comparison is
+using a standalone BLE host stack directly on top of FreeRTOS (e.g. Apache
+NimBLE, or a chip vendor's proprietary BLE SDK) — Zephyr just ships one
+(its own native BLE Host) already integrated with the kernel and
+devicetree, so you don't wire it up yourself.
