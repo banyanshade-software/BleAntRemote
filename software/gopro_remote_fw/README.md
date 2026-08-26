@@ -9,8 +9,8 @@ and the main file only knows about the button/action state machine.
 |------|------|
 | `src/main.c` | Main finite-state machine: button GPIO/interrupt setup, action queue, dispatch to the modules below. No BLE/ANT+ API usage. |
 | `src/ble_gopro.[ch]` | BLE central role driver for the GoPro (Open GoPro API): stack init, bonding, scan/connect, GATT discovery, shutter command. |
-| `src/ant_garmin.[ch]` | ANT+ driver for the Garmin Edge: Generic Controls (button) commands and the temperature broadcast. Currently a stub — see below. |
-| `src/temp_sensor.[ch]` | Reads the nRF52832's internal die temperature sensor (no external thermistor). Feeds `ant_garmin_send_temperature()`. |
+| `src/ant_garmin.[ch]` | ANT+ driver for the Garmin Edge: Generic Controls (button) commands, plus the temperature broadcast session (idle by default; any button press arms a bounded, periodic broadcast — see below). ANT+ transmission itself is currently a stub. |
+| `src/temp_sensor.[ch]` | Reads the nRF52832's internal die temperature sensor (no external thermistor). Called internally by `ant_garmin.c`'s broadcast timer. |
 
 ## What this firmware does today
 - Scans over BLE and automatically connects to the first GoPro it detects
@@ -22,6 +22,31 @@ and the main file only knows about the button/action state machine.
   characteristics, subscribes to notifications.
 - 2 buttons wired as GPIO (Camera ON / Camera OFF) → send the
   corresponding shutter command (`03 01 01 01` / `03 01 01 00`).
+- Any button press also arms the temperature broadcast session (see
+  below) — the timers run today, only the actual ANT+ transmission is
+  a stub.
+
+## Temperature broadcast session
+The internal temperature sensor is **idle by default**: no periodic
+activity, no ANT+ transmission, until something happens.
+
+1. **Any button press** (Camera ON/OFF today; the 3 Garmin buttons once
+   wired) calls `ant_garmin_note_activity()`.
+2. This (re)arms a session: a temperature reading is broadcast every
+   `TEMP_BROADCAST_INTERVAL_MIN` minutes (5, by default) for up to
+   `TEMP_SESSION_DURATION_MIN` minutes (30, by default) since the *last*
+   button press — pressing a button again during an active session resets
+   the 30-minute window rather than starting a second, overlapping one.
+3. After 30 minutes with no further button press, the session ends and
+   the sub-system returns to fully idle.
+
+Both constants are defined at the top of `src/ant_garmin.c` and are
+example defaults from the product requirement — tune them once real
+battery-life testing is possible. Implementation-wise, `ant_garmin.c`
+uses one Zephyr `k_timer` for the periodic broadcast (deferred to a
+`k_work` item, since timer expiry callbacks run in ISR context) and a
+second one-shot `k_timer` to end the session; see the code comments there
+for details.
 
 ## ⚠️ Important: this code has not been built/tested in this environment
 No full nRF Connect SDK / Zephyr toolchain is available here (the SDK is
@@ -32,26 +57,33 @@ it and fix any minor syntax errors** on your side — it's a solid starting
 point, not a validated binary.
 
 ## What's still missing (intentionally, see prior discussion)
-1. **ANT+ (3 Garmin buttons + temperature broadcast)**: requires Nordic's
-   proprietary ANT stack (SoftDevice S212/S332 or the nRF5 SDK ANT
-   module), under a separate license from Nordic/ANT+ Alliance. Not
-   included here — `ant_garmin.c` is a stub (`ant_garmin_handle_button()`,
-   `ant_garmin_send_temperature()`), to be completed once the ANT stack
-   is obtained. The exact ANT+ profile for the temperature broadcast
-   (expected: Environment Sensor) and whether it needs its own channel
-   alongside Generic Controls are open questions — see the specs doc.
+1. **ANT+ transmission itself (3 Garmin buttons + temperature broadcast)**:
+   requires Nordic's proprietary ANT stack (SoftDevice S212/S332 or the
+   nRF5 SDK ANT module), under a separate license from Nordic/ANT+
+   Alliance. Not included here — `ant_garmin_handle_button()` and the
+   internal `ant_garmin_send_temperature()` are stubs that just log a
+   warning, to be completed once the ANT stack is obtained. The session
+   *timing* (see "Temperature broadcast session" above) already runs; the
+   exact ANT+ profile for the temperature broadcast (expected:
+   Environment Sensor) and whether it needs its own channel alongside
+   Generic Controls are open questions — see the specs doc.
 2. **Fine-grained power management (System OFF)**: the dongle is
    USB-powered during testing, so not critical right now. Needs to be
    revisited for the final CR2032 version (see the "wake on PORT event"
-   architecture discussed previously).
+   architecture discussed previously) — and now also needs to account for
+   the temperature broadcast session, which requires a lighter sleep mode
+   (RTC/timer wake) than full System OFF for up to 30 minutes after a
+   button press.
 3. **Battery measurement (ADC)**: not wired on the bare dongle. (Ambient
    temperature no longer needs an ADC/thermistor — see `temp_sensor.c`.)
 4. **3 remaining Garmin buttons** (page right/left/lap): not yet in the
    overlay or in `main.c`, to be added following the same pattern as
    `btn_cam_on`/`btn_cam_off` once ANT+ is in place, dispatching to
    `ant_garmin_handle_button()` (see the commented-out TODO block in
-   `main.c`'s main loop, which also shows where to piggyback the
-   temperature broadcast on the same wake-up).
+   `main.c`'s main loop). `ant_garmin_note_activity()` is already called
+   for every action in the main loop, so the temperature session will
+   automatically be armed by these buttons too once wired — no extra code
+   needed there.
 5. **Internal temperature sensor devicetree/Kconfig**: `temp_sensor.c`
    follows Zephyr's standard sensor API (`SENSOR_CHAN_DIE_TEMP`) for the
    nRF52's built-in TEMP peripheral, but the exact devicetree node label

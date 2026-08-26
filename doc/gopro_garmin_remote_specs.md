@@ -27,8 +27,24 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
 - The reading is **broadcast over ANT+** (the same radio/link already used
   for the Garmin buttons) so it can be displayed directly on the Garmin
   Edge, instead of only being logged internally.
-- Exact broadcast profile/timing: see "Garmin Edge communication (ANT+)"
-  below and "Open points".
+- **Broadcast policy — idle by default, activity-triggered session**:
+  - The temperature sub-system is **completely idle by default**: no ANT+
+    transmission at all until something happens.
+  - **Any button press** (camera or Garmin — not just the Garmin ones)
+    wakes the sub-system and starts a broadcast session.
+  - While a session is active, a reading is **sent every 5 minutes**
+    (example value, tunable), for **up to 30 minutes** (example value,
+    tunable) since the *last* button press.
+  - Each new button press during an active session **resets the 30-minute
+    window** back to its full duration (it does not stack additional
+    sessions).
+  - After 30 minutes with no further button press, the session ends and
+    the sub-system goes back to fully idle until the next button press.
+- Exact broadcast profile: see "Garmin Edge communication (ANT+)" below.
+  The session behavior above is implemented in
+  `software/gopro_remote_fw/src/ant_garmin.c`
+  (`TEMP_BROADCAST_INTERVAL_MIN` / `TEMP_SESSION_DURATION_MIN`); only the
+  actual ANT+ transmission is still a stub — see "Open points".
 
 ### Remote configuration (mobile app)
 - The device must be **configurable from a companion mobile app** (iOS/Android),
@@ -71,8 +87,14 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
   protocol module is modified, replaced, or extended.
 - Concretely, in `software/gopro_remote_fw/src/`:
   - `main.c` — main finite-state machine (buttons, action queue, dispatch).
+    Only reports "a button was pressed" to `ant_garmin.c` — it does not
+    manage the temperature broadcast session itself.
   - `ble_gopro.[ch]` — BLE/GoPro module (Open GoPro API).
-  - `ant_garmin.[ch]` — ANT+/Garmin module (currently a stub, see firmware README).
+  - `ant_garmin.[ch]` — ANT+/Garmin module (currently a stub, see firmware
+    README): Garmin button commands, and the temperature broadcast session
+    (timing/policy) built on top of `temp_sensor.[ch]`.
+  - `temp_sensor.[ch]` — reads the internal die temperature sensor; knows
+    nothing about ANT+ or when to broadcast.
 - Rationale: several protocols/features are still open or unimplemented
   (ANT+, mobile-app BLE configuration — see "Remote configuration" above).
   Keeping them isolated avoids one area's changes breaking another, keeps
@@ -83,13 +105,22 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
   English" convention already applied across this project.
 
 ### Overall architecture
-- MCU **wakes only on button press** (System OFF between actions), no
-  permanent radio connection.
+- MCU **wakes only on button press** (System OFF between actions) by
+  default, no permanent radio connection.
 - On wake-up: the firmware identifies the pressed button (GPIO controller
   LATCH register), activates the corresponding radio stack (BLE or ANT+),
   executes the command, then returns to deep sleep.
 - **Only one protocol active at a time** (sequential multi-protocol, not
   simultaneous) → simplifies the firmware and limits power consumption.
+- **Exception — temperature broadcast session**: any button press also
+  starts a bounded ANT+ temperature broadcast session (every 5 min, for up
+  to 30 min — see "Thermometer" above). For the duration of an active
+  session, the MCU can no longer drop to full System OFF between actions:
+  it needs a lighter low-power sleep (RTC/kernel-timer wake, not GPIO-only)
+  so it can wake up every few minutes to send a reading, then goes back to
+  pure button-only System OFF once the session ends. This is a deliberate,
+  bounded exception to the "wake only on button press" rule above, not a
+  permanent always-on radio.
 - The mobile-app configuration link (BLE, see above) follows the same
   wake-on-demand principle: the device advertises as a BLE peripheral only
   when entering a configuration session (e.g. triggered by a dedicated
@@ -134,16 +165,15 @@ ANT+ is used for two purposes, both from the same radio/module:
      common device type Garmin Edge units already recognize for ambient
      temperature accessories — **to be confirmed** against the ANT+
      specification once the ANT stack is available.
-   - **Session reuse, no extra wake-up**: the temperature reading is
-     intended to be sent opportunistically whenever a Garmin button
-     (page right/left, lap) already wakes the device and activates the
-     ANT+ radio — this fits the existing "wake only on button press, one
-     protocol at a time" architecture with no additional power cost.
-   - **Open question**: this only updates the Edge's temperature field when
-     a Garmin button is pressed, not continuously. Whether the product
-     needs periodic (timer-driven) updates while idle — and the resulting
-     battery-life trade-off against the "several months on CR2032" target
-     — is **not decided yet** (see "Open points").
+   - **Broadcast policy (decided)**: idle by default; **any** button press
+     (camera or Garmin) arms a session that sends a reading every 5 minutes
+     for up to 30 minutes since the last press, then returns to idle — see
+     "Thermometer" above for the full behavior. This is triggered by any
+     button, not only the Garmin ones, so a camera-button press (BLE-only
+     action) also arms the ANT+ session; the actual periodic ANT+
+     transmissions still happen sequentially/one-protocol-at-a-time, just
+     scheduled a few minutes later rather than piggybacked on an
+     already-open ANT+ link.
    - **Open question**: whether the Generic Controls channel and the
      Environment Sensor broadcast need to run as two separate concurrent
      ANT+ channels (channel count depends on the ANT stack/SoftDevice
@@ -195,9 +225,9 @@ ANT+ is used for two purposes, both from the same radio/module:
   ±4°C per Nordic's datasheet. Acceptable for an indicative "feels like"
   reading on the Edge, not for precision measurement. To be validated once
   real hardware is available.
-- Activated only occasionally (on the same wake-up as a Garmin button
-  press, see "Garmin Edge communication (ANT+)" above), not continuously,
-  to preserve battery life.
+- Sampled only during an active broadcast session (every 5 minutes, for up
+  to 30 minutes after the last button press — see "Thermometer" above),
+  not continuously, to preserve battery life.
 
 ### PCB
 - Based on the **Ebyte E73-2G4M08S1E** module (18.0 x 13.0mm, 43-pin
@@ -262,10 +292,17 @@ ANT+ is used for two purposes, both from the same radio/module:
   Sensor page/device-type used, and whether it needs its own ANT+ channel
   alongside the Generic Controls channel (concurrent channel count depends
   on the ANT stack/SoftDevice chosen — not obtained yet).
-- **ANT+ temperature broadcast timing**: opportunistic (piggybacked on
-  Garmin button presses, no extra wake-up) vs. periodic/timer-driven
-  (continuously updated Edge temperature field, but adds wake-ups outside
-  of button presses and impacts the CR2032 battery-life target) — not
-  decided yet.
+- **Temperature broadcast timing values**: the 5-minute interval / 30-minute
+  session length are example defaults (`TEMP_BROADCAST_INTERVAL_MIN`,
+  `TEMP_SESSION_DURATION_MIN` in `ant_garmin.c`) — the overall
+  idle-by-default, activity-triggered policy is decided (see "Thermometer"
+  above), but the exact numbers should be revisited once real battery-life
+  testing is possible.
+- **Battery-life impact of the broadcast session**: needs to be measured
+  against the "several months on CR2032" target once hardware and the real
+  ANT+ stack are available — the session bounds the extra power draw to
+  (at most) 30 minutes after each button press rather than being always-on,
+  but the actual current draw during that window (RTC-wake sleep mode +
+  periodic ANT+ TX) is not yet characterized.
 - **Internal sensor accuracy**: die temperature vs. true ambient
   temperature offset/calibration to be validated on real hardware.

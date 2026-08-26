@@ -6,12 +6,15 @@
  * press, decides which action to run, and dispatches it to the
  * protocol-specific modules. It does not know about BLE or ANT+
  * internals - that logic lives in ble_gopro.[ch] (GoPro over BLE) and
- * ant_garmin.[ch] (Garmin Edge over ANT+, stub for now), with
- * temp_sensor.[ch] providing the internal temperature reading that
- * ant_garmin broadcasts. This split keeps each radio protocol/sensor
- * independently maintainable and testable, and makes it straightforward
- * to add a new module later (e.g. a BLE peripheral "configuration
- * service" for a companion mobile app) without touching the others.
+ * ant_garmin.[ch] (Garmin Edge over ANT+, stub for now). temp_sensor.[ch]
+ * provides the internal temperature reading; ant_garmin.c owns *when* to
+ * read and broadcast it (a bounded, activity-triggered session - see
+ * ant_garmin.h). main.c only reports "a button was pressed" via
+ * ant_garmin_note_activity(), it does not manage the session itself.
+ * This split keeps each radio protocol/sensor independently maintainable
+ * and testable, and makes it straightforward to add a new module later
+ * (e.g. a BLE peripheral "configuration service" for a companion mobile
+ * app) without touching the others.
  *
  * What this firmware does (functional) :
  *   - Scans for and connects to a GoPro (filtering on the BLE service
@@ -34,7 +37,14 @@
  *     are not wired to GPIOs/actions yet either (see README).
  *   - Fine-grained power management (System OFF between connections) :
  *     the dongle is USB-powered, so not critical for testing, but
- *     needs to be revisited for the final CR2032 version.
+ *     needs to be revisited for the final CR2032 version. Note this
+ *     also now needs to account for the temperature broadcast session
+ *     (see ant_garmin.h): while a session is active (up to
+ *     TEMP_SESSION_DURATION_MIN minutes after the last button press),
+ *     the MCU must wake periodically via its RTC/kernel timer to send
+ *     a reading, so it cannot use full System OFF sleep during that
+ *     window - only once the session ends does it go back to pure
+ *     button-interrupt wake-up.
  *   - Battery voltage reading (ADC) : not wired on the bare dongle, to
  *     be added with the real enclosure. (Ambient temperature no longer
  *     needs a thermistor/ADC - see temp_sensor.c, which reads the
@@ -176,6 +186,11 @@ int main(void)
 	while (1) {
 		k_msgq_get(&action_msgq, &action, K_FOREVER);
 
+		/* Any button press (camera or Garmin) counts as activity:
+		 * (re)arms the bounded temperature broadcast session. See
+		 * ant_garmin.h for the session's timing/behavior. */
+		ant_garmin_note_activity();
+
 		switch (action) {
 		case ACTION_CAM_ON:
 			LOG_INF("Camera ON button pressed");
@@ -194,15 +209,6 @@ int main(void)
 		 * case ACTION_PAGE_L:
 		 * case ACTION_LAP:
 		 *	ant_garmin_handle_button(...);
-		 *	// Piggyback the temperature broadcast on the same
-		 *	// already-active ANT+ session - no extra wake-up.
-		 *	// See doc/gopro_garmin_remote_specs.md, "Garmin Edge
-		 *	// communication (ANT+)" for the open question of
-		 *	// periodic (timer-driven) updates while idle.
-		 *	int16_t temp_centi;
-		 *	if (temp_sensor_read(&temp_centi)) {
-		 *		ant_garmin_send_temperature(temp_centi);
-		 *	}
 		 *	break;
 		 */
 		}
