@@ -22,10 +22,17 @@
  *   - Performs bonding (secure pairing), required to talk to the
  *     GoPro. Keys are persisted to flash (CONFIG_SETTINGS), so
  *     subsequent connections won't need to re-pair.
- *   - Discovers the GP-0072 (Command) and GP-0073 (Command Response)
- *     characteristics, subscribes to GP-0073 notifications.
- *   - On "Camera ON" button press -> writes the shutter=1 command.
- *     On "Camera OFF" button press -> writes the shutter=0 command.
+ *   - Discovers the GP-0072/73 (Command/Response) and GP-0074/75
+ *     (Query/Response) characteristics, subscribes to both.
+ *   - Runs a small recording FSM (see the "Recording FSM" comment right
+ *     above main()): "Camera ON"/"Camera OFF" (multi-button mode) or
+ *     SW1 (mono-button toggle mode) drive it towards REC_ON/REC_OFF;
+ *     the shutter=1/0 command is only sent on an actual on<->off
+ *     transition, never repeated for an unchanged target, so it can't
+ *     double-send the GoPro's confirmation beep. A ~1s status poll
+ *     confirms the command took effect and also catches the camera
+ *     being started/stopped manually (or disconnecting).
+ *   - Buttons are debounced with a simple per-button cooldown.
  *
  * What this firmware does NOT do (to be added later) :
  *   - ANT+ (Garmin page right/left/lap buttons, and the temperature
@@ -75,98 +82,150 @@ LOG_MODULE_REGISTER(gopro_remote, LOG_LEVEL_INF);
 #define BTN_CAM_OFF_NODE DT_ALIAS(sw_cam_off)
 #define BTN_SW1_NODE     DT_ALIAS(sw1)
 
-//static const struct gpio_dt_spec btn_cam_on =
-//	GPIO_DT_SPEC_GET(BTN_CAM_ON_NODE, gpios);
-//static const struct gpio_dt_spec btn_cam_off =
-//	GPIO_DT_SPEC_GET(BTN_CAM_OFF_NODE, gpios);
-
-//* BUTTON1 = SW1 = P1.6
-
-static const struct gpio_dt_spec btn_sw1 =
-		GPIO_DT_SPEC_GET(BTN_SW1_NODE, gpios);
-
-static struct gpio_callback btn_cam_on_cb __attribute__((unused));
-static struct gpio_callback btn_cam_off_cb __attribute__((unused));
-static struct gpio_callback btn_sw1_cb;
-
-/* Action queue processed outside of interrupt context */
+/* Action queue processed outside of interrupt context. STATUS_TICK/
+ * STATUS_RESULT are not button presses - see the status timer and
+ * ble_gopro status callback further below - but they go through the
+ * same queue so the FSM in main() stays single-threaded. */
 enum remote_action {
 	ACTION_CAM_ON,
 	ACTION_CAM_OFF,
-	ACTION_BTN_SW1
+	ACTION_BTN_SW1,
+	ACTION_STATUS_TICK,
+	ACTION_STATUS_RES_CAM_ON,
+	ACTION_STATUS_RES_CAM_OFF,
 };
 
-K_MSGQ_DEFINE(action_msgq, sizeof(enum remote_action), 8, 4);
+
+ struct remote_msg {
+        enum remote_action action;
+ };
+
+K_MSGQ_DEFINE(action_msgq, sizeof(struct remote_msg), 8, 4);
 
 /* -------------------------------------------------------------------
  * Buttons : ISR -> just posts an event to the queue, all the (BLE)
  * work happens in the main loop (normal thread).
  * ------------------------------------------------------------------- */
 
- static void btn_sw1_isr(const struct device *dev, struct gpio_callback *cb,
-			    uint32_t pins)
+
+
+#define DEBOUNCE_MS 200
+struct button {
+	const struct gpio_dt_spec spec;
+	enum remote_action action;
+	const char *name;
+	struct gpio_callback cb;
+	int64_t last_press_ms;
+};
+
+static   struct button btn_cam_on = {
+	.spec = GPIO_DT_SPEC_GET(BTN_CAM_ON_NODE, gpios),
+	.action = ACTION_CAM_ON,
+	.name = "CAM_ON",
+};
+static  struct button btn_cam_off = {
+	.spec = GPIO_DT_SPEC_GET(BTN_CAM_OFF_NODE, gpios),
+	.action = ACTION_CAM_OFF,
+	.name = "CAM_OFF",
+};
+static  struct button btn_sw1 = {
+	.spec = GPIO_DT_SPEC_GET(BTN_SW1_NODE, gpios),
+	.action = ACTION_BTN_SW1,
+	.name = "SW1",
+};
+
+static void btn_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-	LOG_INF("Button SW1 pressed (GPIO %d)", pins);
-	enum remote_action a = ACTION_BTN_SW1;
-	k_msgq_put(&action_msgq, &a, K_NO_WAIT);
+	struct button *btn = CONTAINER_OF(cb, struct button, cb);
+	int64_t now = k_uptime_get();
+
+	if (now - btn->last_press_ms < DEBOUNCE_MS) {
+		return; /* bounce (or a too-fast repeat press): ignore */
+	}
+	btn->last_press_ms = now;
+
+	LOG_INF("Button %s pressed", btn->name);
+	struct remote_msg msg = { .action = btn->action };
+
+	k_msgq_put(&action_msgq, &msg, K_NO_WAIT);
 }
 
-
-static void btn_cam_on_isr(const struct device *dev, struct gpio_callback *cb,
-			    uint32_t pins)  __attribute__((unused));
-static void btn_cam_on_isr(const struct device *dev, struct gpio_callback *cb,
-			    uint32_t pins)
-{
-	LOG_INF("Button on pressed (GPIO %d)", pins);
-	enum remote_action a = ACTION_CAM_ON;
-	k_msgq_put(&action_msgq, &a, K_NO_WAIT);
-}
-
-static void btn_cam_off_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins) __attribute__((unused));
-static void btn_cam_off_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
-{
-	LOG_INF("Button off pressed (GPIO %d)", pins);
-	enum remote_action a = ACTION_CAM_OFF;
-	k_msgq_put(&action_msgq, &a, K_NO_WAIT);
-}
-
-static int setup_buttons(void)
+static int setup_one_button( struct button *btn)
 {
 	int err;
 
-	/*if (!gpio_is_ready_dt(&btn_cam_on) || !gpio_is_ready_dt(&btn_cam_off)) {
-		LOG_ERR("Button GPIOs not ready");
-		return -ENODEV;
-	}*/
-	if (!gpio_is_ready_dt(&btn_sw1)) {
-		LOG_ERR("Button GPIO not ready");
+	if (!gpio_is_ready_dt(&btn->spec)) {
+		LOG_ERR("Button %s GPIO not ready", btn->name);
 		return -ENODEV;
 	}
 
-	/*
-	err = gpio_pin_configure_dt(&btn_cam_on, GPIO_INPUT);
-	err |= gpio_pin_configure_dt(&btn_cam_off, GPIO_INPUT);
-	err |= gpio_pin_interrupt_configure_dt(&btn_cam_on, GPIO_INT_EDGE_TO_ACTIVE);
-	err |= gpio_pin_interrupt_configure_dt(&btn_cam_off, GPIO_INT_EDGE_TO_ACTIVE);
-	*/
-	err = gpio_pin_configure_dt(&btn_sw1, GPIO_INPUT);
-	err |= gpio_pin_interrupt_configure_dt(&btn_sw1, GPIO_INT_EDGE_TO_ACTIVE);
+	err = gpio_pin_configure_dt(&btn->spec, GPIO_INPUT);
+	err |= gpio_pin_interrupt_configure_dt(&btn->spec, GPIO_INT_EDGE_TO_ACTIVE);
 	if (err) {
-		LOG_ERR("Button GPIO configuration failed (%d)", err);
+		LOG_ERR("Button %s GPIO configuration failed (%d)", btn->name, err);
 		return err;
 	}
 
-	/*
-	gpio_init_callback(&btn_cam_on_cb, btn_cam_on_isr, BIT(btn_cam_on.pin));
-	gpio_add_callback(btn_cam_on.port, &btn_cam_on_cb);
-
-	gpio_init_callback(&btn_cam_off_cb, btn_cam_off_isr, BIT(btn_cam_off.pin));
-	gpio_add_callback(btn_cam_off.port, &btn_cam_off_cb);
-	*/
-	gpio_init_callback(&btn_sw1_cb, btn_sw1_isr, BIT(btn_sw1.pin));
-	gpio_add_callback(btn_sw1.port, &btn_sw1_cb);
+	gpio_init_callback(&btn->cb, btn_isr, BIT(btn->spec.pin));
+	gpio_add_callback(btn->spec.port, &btn->cb);
 	return 0;
 }
+
+
+
+static int setup_buttons(void)
+{
+	int err  = 0;
+	err |= setup_one_button(&btn_cam_on);
+	err |= setup_one_button(&btn_cam_off);
+	err |= setup_one_button(&btn_sw1);
+	return err;
+}
+
+/* -------------------------------------------------------------------
+ * ~1s status poll timer and ble_gopro status callback: both just post
+ * to the action queue, all the FSM logic lives in main()'s loop below.
+ * k_timer expiry and the BT RX thread are not the main thread, so this
+ * is all they're allowed to do.
+ * ------------------------------------------------------------------- */
+
+
+static void status_timer_handler(struct k_timer *timer)
+{
+	struct remote_msg msg = { .action = ACTION_STATUS_TICK };
+	k_msgq_put(&action_msgq, &msg, K_NO_WAIT);
+}
+
+K_TIMER_DEFINE(status_timer, status_timer_handler, NULL);
+
+static void on_gopro_status(enum gopro_rec_state state)
+{
+	struct remote_msg msg = { 0 };
+	msg.action = (state == GOPRO_REC_STARTED) ? ACTION_STATUS_RES_CAM_ON : ACTION_STATUS_RES_CAM_OFF; ;
+	k_msgq_put(&action_msgq, &msg, K_NO_WAIT);
+}
+
+/*
+ * Recording FSM states (the whole FSM lives in main()'s loop below):
+ *   REC_OFF      - not recording, idle.
+ *   REC_ON_SENT  - "start recording" sent, waiting for the camera to
+ *                  confirm it (via the ~1s status poll).
+ *   REC_ON       - camera confirmed it is recording.
+ *   REC_OFF_SENT - "stop recording" sent, waiting for confirmation.
+ * No other state is needed: ON_SENT/OFF_SENT only exist to remember
+ * "a command is outstanding" so a same-direction button press can be
+ * ignored (that's what stops the BLE "start recording" command from
+ * ever being sent twice in a row, which is what makes the camera beep
+ * an extra time) - REC_ON/REC_ON_SENT together mean "target: on",
+ * REC_OFF/REC_OFF_SENT together mean "target: off".
+ */
+enum rec_state {
+	REC_UNKNOWN = 0,
+	REC_OFF,
+	REC_ON_SENT,
+	REC_ON,
+	REC_OFF_SENT,
+};
 
 /* -------------------------------------------------------------------
  * main - button/action finite-state machine
@@ -195,31 +254,133 @@ int main(void)
 		LOG_WRN("Internal temperature sensor unavailable (%d)", err);
 	}
 
-	/* Main loop: wait for a button action and dispatch it to the
-	 * relevant protocol module. Each module manages its own
-	 * connection/reconnection state internally. */
-	enum remote_action action;
+	ble_gopro_set_status_cb(on_gopro_status);
+	k_timer_start(&status_timer, K_SECONDS(1), K_SECONDS(1));
+
+	enum rec_state rec_state = REC_UNKNOWN; /* start unknown, will be set by the first status poll */
+	bool status_query_sent = false; /* at most one status query outstanding */
+
+	/* Main loop: wait for a button/status action and run the
+	 * recording FSM. Each protocol module (ble_gopro, ant_garmin)
+	 * manages its own connection/reconnection state internally. */
+	struct remote_msg msg;
 	while (1) {
-		k_msgq_get(&action_msgq, &action, K_FOREVER);
+		k_msgq_get(&action_msgq, &msg, K_FOREVER);
 
-		/* Any button press (camera or Garmin) counts as activity:
-		 * (re)arms the bounded temperature broadcast session. See
-		 * ant_garmin.h for the session's timing/behavior. */
-		ant_garmin_note_activity();
+		enum remote_action action = msg.action;
 
+		if (ACTION_BTN_SW1 == action) {
+			switch (rec_state) {
+				case REC_UNKNOWN:	//FALLTHRU
+				case REC_ON_SENT:	//FALLTHRU
+				case REC_OFF_SENT:	//FALLTHRU
+				default:
+					/* ignore button presses until we know the camera's state (via the status poll) */
+					break;
+				case REC_OFF:
+					action = ACTION_CAM_ON;
+					break;	
+				case REC_ON:
+					action = ACTION_CAM_OFF;
+					break;
+			}
+		}
 		switch (action) {
-		case ACTION_BTN_SW1:
-			LOG_INF("Button SW1 pressed");
-			ble_gopro_send_shutter(true);
-			break;
 		case ACTION_CAM_ON:
-			LOG_INF("Camera ON button pressed");
-			ble_gopro_send_shutter(true);
+			switch (rec_state) {
+				case REC_OFF_SENT:
+					k_timer_stop(&status_timer);
+					status_query_sent = false; /* poll right away next tick */
+					//FALLTHRU
+				case REC_OFF:
+					ble_gopro_send_shutter(true);
+					rec_state = REC_ON_SENT;
+					status_query_sent = false; /* poll right away next tick */
+					k_timer_start(&status_timer, K_SECONDS(1), K_SECONDS(1));
+					break;
+				
+				default:
+					// ignore button in any other states
+					LOG_INF("BAD STATE FOR CAM_ON: %d -> REC_ON_SENT", rec_state);
+					break;
+			}
 			break;
+
 		case ACTION_CAM_OFF:
-			LOG_INF("Camera OFF button pressed");
-			ble_gopro_send_shutter(false);
+			switch (rec_state) {
+			case REC_ON_SENT:
+					k_timer_stop(&status_timer);
+					status_query_sent = false; /* poll right away next tick */
+					//FALLTHRU
+				case REC_ON:
+					ble_gopro_send_shutter(false);
+					rec_state = REC_OFF_SENT;
+					status_query_sent = false; /* poll right away next tick */
+					k_timer_start(&status_timer, K_SECONDS(1), K_SECONDS(1));
+					break;
+				default:
+					// ignore button in any other states
+					LOG_INF("BAD STATE FOR CAM_OFF: %d -> REC_OFF_SENT", rec_state);
+					break;
+			}
 			break;
+		case ACTION_STATUS_TICK:
+			if (rec_state == REC_OFF) {
+				LOG_ERR("STATUS_TICK while REC_OFF: shouldn't have polled, stopping timer");	
+				k_timer_stop(&status_timer);
+				break;
+			}
+			if (!status_query_sent) {
+				ble_gopro_query_status();
+				status_query_sent = true;
+			} else {
+				LOG_ERR("STATUS_TICK while status_query_sent: shouldn't have polled, stopping timer");
+			}
+			break;
+		case ACTION_STATUS_RES_CAM_ON:
+			if (!status_query_sent) {
+				LOG_ERR("STATUS_RES_CAM_ON while !status_query_sent: ignore ressponse");
+				//k_timer_stop(&status_timer);
+				break;
+			}
+			switch(rec_state) {
+				case REC_ON_SENT:
+					rec_state = REC_ON;
+					break;
+				case REC_OFF_SENT:
+					LOG_ERR("STATUS_RES_CAM_ON while REC_OFF_SENT");
+					break;
+				default:
+					LOG_ERR("STATUS_RES_CAM_ON while in state %d: shouldn't have polled, stopping timer", rec_state);
+					k_timer_stop(&status_timer);
+					break;
+			}
+	
+		case ACTION_STATUS_RES_CAM_OFF:
+			if (!status_query_sent) {
+				LOG_ERR("STATUS_RES_CAM_OFF while !status_query_sent: ignore ressponse");
+				//k_timer_stop(&status_timer);
+				break;
+			}			
+			switch(rec_state) {
+				case REC_OFF_SENT:
+					rec_state = REC_OFF;
+					k_timer_stop(&status_timer);
+					break;
+				case REC_ON_SENT:
+					LOG_ERR("STATUS_RES_CAM_OFF while REC_ON_SENT");
+					break;
+				default:
+					LOG_ERR("STATUS_RES_CAM_OFF while in state %d: shouldn't have polled, stopping timer", rec_state);
+					k_timer_stop(&status_timer);
+					break;
+			}
+			break;
+		default:
+			LOG_ERR("Unknown action %d", msg.action);
+			break;
+		}
+		
 		/*
 		 * TODO once the 3 Garmin buttons (page right/left, lap) are
 		 * wired to GPIOs (see boards/nrf52840dongle_nrf52840.overlay)
@@ -228,10 +389,11 @@ int main(void)
 		 * case ACTION_PAGE_R:
 		 * case ACTION_PAGE_L:
 		 * case ACTION_LAP:
+		 *	ant_garmin_note_activity();
 		 *	ant_garmin_handle_button(...);
 		 *	break;
 		 */
-		}
+		
 	}
 
 	return 0;
