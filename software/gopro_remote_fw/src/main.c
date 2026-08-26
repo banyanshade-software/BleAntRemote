@@ -29,15 +29,15 @@
  *
  * What this firmware does NOT do (to be added later) :
  *   - ANT+ (Garmin page right/left/lap buttons, and the temperature
- *     broadcast) : the original nRF52832 target wasn't supported by
- *     Nordic's Zephyr-based ANT+ add-on, so the project has moved its
- *     MCU target to the nRF52840 (see doc/gopro_garmin_remote_specs.md,
- *     "ANT+ implementation notes") - but the west-manifest/Kconfig
- *     integration of the ANT+ add-on itself is not done yet, so this is
- *     still stubbed. The Garmin buttons and the temperature broadcast
- *     are wired to stubs (see ant_garmin.c) in the meantime. The 3
- *     Garmin buttons themselves are not wired to GPIOs/actions yet
- *     either (see README).
+ *     broadcast) : blocked on a toolchain/chip decision, not just a
+ *     licensing step - the nRF52832 used here isn't supported by
+ *     Nordic's Zephyr-based ANT+ add-on (only nRF52840/nRF5340 are);
+ *     ANT+ on this chip needs the older, separate nRF5 SDK (S212/S332
+ *     SoftDevice) instead. See doc/gopro_garmin_remote_specs.md, "ANT+
+ *     implementation notes". Not included here. The Garmin buttons
+ *     and the temperature broadcast are wired to stubs (see
+ *     ant_garmin.c) in the meantime. The 3 Garmin buttons themselves
+ *     are not wired to GPIOs/actions yet either (see README).
  *   - Fine-grained power management (System OFF between connections) :
  *     the dongle is USB-powered, so not critical for testing, but
  *     needs to be revisited for the final CR2032 version. Note this

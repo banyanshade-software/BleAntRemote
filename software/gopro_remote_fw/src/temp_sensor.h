@@ -1,5 +1,5 @@
 /*
- * temp_sensor - reads the nRF52's internal die temperature sensor
+ * temp_sensor - reads the nRF52832's internal die temperature sensor
  * ======================================================================
  * Wraps the SoC's built-in TEMP peripheral (no external thermistor
  * needed) behind a small, protocol-agnostic interface. Its output is
