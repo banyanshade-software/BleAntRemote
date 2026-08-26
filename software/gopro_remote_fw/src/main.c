@@ -193,8 +193,10 @@ static int setup_buttons(void)
 static void status_timer_handler(struct k_timer *timer)
 {
 	struct remote_msg msg = { .action = ACTION_STATUS_TICK };
+	LOG_DBG("TTT isr");
 	k_msgq_put(&action_msgq, &msg, K_NO_WAIT);
 }
+
 
 K_TIMER_DEFINE(status_timer, status_timer_handler, NULL);
 
@@ -255,6 +257,8 @@ int main(void)
 	}
 
 	ble_gopro_set_status_cb(on_gopro_status);
+	//k_timer_init(&status_timer, status_timer_handler, NULL);
+	LOG_DBG("TTT Starting status timer (1s period)");
 	k_timer_start(&status_timer, K_SECONDS(1), K_SECONDS(1));
 
 	enum rec_state rec_state = REC_UNKNOWN; /* start unknown, will be set by the first status poll */
@@ -285,6 +289,7 @@ int main(void)
 					break;
 			}
 		}
+		LOG_DBG("FSM: action %d, rec_state %d", action, rec_state);
 		switch (action) {
 		case ACTION_CAM_ON:
 			switch (rec_state) {
@@ -331,10 +336,11 @@ int main(void)
 				break;
 			}
 			if (!status_query_sent) {
+				LOG_DBG("STATUS_TICK: sending status query");
 				ble_gopro_query_status();
 				status_query_sent = true;
 			} else {
-				LOG_ERR("STATUS_TICK while status_query_sent: shouldn't have polled, stopping timer");
+				LOG_ERR("STATUS_TICK while status_query_sent: ignore?");
 			}
 			break;
 		case ACTION_STATUS_RES_CAM_ON:
@@ -344,6 +350,10 @@ int main(void)
 				break;
 			}
 			switch(rec_state) {
+				case REC_UNKNOWN:
+					LOG_DBG("STATUS_RES_CAM_ON while REC_UNKNOWN: set to REC_ON");
+					rec_state = REC_ON;
+					break;
 				case REC_ON_SENT:
 					rec_state = REC_ON;
 					break;
@@ -363,6 +373,11 @@ int main(void)
 				break;
 			}			
 			switch(rec_state) {
+				case REC_UNKNOWN:
+					LOG_DBG("STATUS_RES_CAM_OFF while REC_UNKNOWN: set to REC_OFF");
+					rec_state = REC_OFF;
+					k_timer_stop(&status_timer);
+					break;
 				case REC_OFF_SENT:
 					rec_state = REC_OFF;
 					k_timer_stop(&status_timer);
