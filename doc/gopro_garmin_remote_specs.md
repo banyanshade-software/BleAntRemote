@@ -5,8 +5,9 @@
 ### Objective
 Compact housing mounted on the handlebar, allowing remote control of:
 - the **GoPro Hero 11 Black Mini** camera (via BLE / Open GoPro API)
-- the **Garmin Edge Explore** cycling computer (via ANT+ / Generic Controls profile),
-  which also carries the ambient temperature broadcast (see "Thermometer" below)
+- the **Garmin Edge Explore** cycling computer (via ANT+ / **Controls** profile,
+  Generic use-case — see the "ANT+ primer" below for naming), which also
+  carries the ambient temperature broadcast (see "Thermometer" below)
 
 ### Controls (5 buttons)
 
@@ -14,9 +15,9 @@ Compact housing mounted on the handlebar, allowing remote control of:
 |---|--------|--------|-----------|
 | 1 | Camera ON | Starts GoPro recording | BLE (Open GoPro) |
 | 2 | Camera OFF | Stops GoPro recording | BLE (Open GoPro) |
-| 3 | Page right | Scrolls the Edge screen to the right | ANT+ (Generic Controls) |
-| 4 | Page left | Scrolls the Edge screen to the left | ANT+ (Generic Controls) |
-| 5 | Lap | Marks a lap on the Edge | ANT+ (Generic Controls) |
+| 3 | Page right | Scrolls the Edge screen to the right | ANT+ (Controls, Generic) |
+| 4 | Page left | Scrolls the Edge screen to the left | ANT+ (Controls, Generic) |
+| 5 | Lap | Marks a lap on the Edge | ANT+ (Controls, Generic) |
 
 Each button triggers an independent, immediate action (no mode/menu to navigate).
 
@@ -128,11 +129,18 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
 
 ### MCU / radio
 - **Nordic nRF52832** (Ebyte E73-2G4M08S1E module) — Cortex-M4F, 512KB flash / 64KB RAM.
-- Chosen because it natively supports both **BLE and ANT+** on the same radio
-  (different stacks depending on the protocol in use), and because it is the
-  only chip successfully tested in practice for BLE pairing with a GoPro
-  (unlike the ESP32).
-- Software stack: **nRF Connect SDK (Zephyr)**, low-level C development.
+- Chosen because the *silicon* natively supports both **BLE and ANT+** on
+  the same radio, and because it is the only chip successfully tested in
+  practice for BLE pairing with a GoPro (unlike the ESP32).
+- Software stack: **nRF Connect SDK (Zephyr)**, low-level C development,
+  for the BLE side (already implemented, see `ble_gopro.c`). **This does
+  not currently extend to ANT+ on this specific chip** — see "ANT+
+  implementation notes" at the end of this document: Nordic's Zephyr-based
+  ANT+ add-on only supports the nRF52840/nRF5340 today, not the nRF52832
+  used here. ANT+ on the nRF52832 requires the older, separate **nRF5
+  SDK** (non-Zephyr) instead. This is an open toolchain/architecture
+  decision, not yet resolved — see the implementation notes for the
+  options being considered.
 
 ### Buttons & wake-up
 - 5 touch buttons, individual GPIOs (no matrix), internal pull-up, active-low logic.
@@ -150,21 +158,90 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
 - Notification re-subscription required on every connection (the GoPro does
   not persist subscription state).
 
-### Garmin Edge communication (ANT+)
-ANT+ is used for two purposes, both from the same radio/module:
+### ANT+ primer (for readers new to ANT+)
+A quick, non-exhaustive overview so the rest of this document is readable
+if you've never touched ANT+ before.
 
-1. **Remote control** — ANT+ **Generic Controls** profile (the same one used
-   by the official Garmin *Edge Remote* accessory).
-   - Commands sent as **Page 73 (Generic Command)** with the corresponding
-     key code (page right / page left / lap).
+- **What it is.** ANT+ is a low-power wireless protocol in the 2.4 GHz ISM
+  band (same band as BLE and Wi-Fi, but a different, incompatible radio
+  protocol), created by Dynastream Innovations, a Garmin subsidiary. It's
+  the protocol behind most sports/fitness sensor ecosystems: heart-rate
+  straps, bike speed/cadence/power sensors, and — relevant here — Garmin's
+  own accessories like the *Edge Remote*.
+- **ANT vs. ANT+.** "ANT" is the base, open, low-level radio protocol.
+  "ANT+" is a managed layer on top: officially standardized, certified
+  **device profiles** (see below) plus a shared **network key**, so any
+  ANT+ heart-rate strap works with any ANT+ head unit regardless of
+  manufacturer. Using the ANT+ name/logo/network key requires ANT+
+  Alliance membership — see the implementation notes further down.
+- **Channels, not connections.** Unlike BLE's connection-oriented GATT
+  model (pairing, a persistent link, read/write/notify on characteristics),
+  ANT+ communication happens over **channels**: a matching set of radio
+  parameters (RF frequency, channel period/message rate, device number,
+  device type, transmission type) configured independently on both sides.
+  If both ends use the same parameters, they simply "hear" each other —
+  no handshake/bonding step like BLE. One ANT+ radio can run several
+  channels at once, which is how a Garmin Edge talks to a heart-rate
+  strap, a cadence sensor, and a remote control simultaneously.
+- **Master and slave.** Each channel has a **master** (the transmitter —
+  typically the sensor/accessory) and a **slave** (the receiver —
+  typically the head unit). In this project, the remote is the master
+  (like a heart-rate strap, or the official Edge Remote), and the Garmin
+  Edge is the slave.
+- **Message types.** *Broadcast* messages are fire-and-forget, sent on a
+  fixed schedule (the channel period) — what most sensors use, and what
+  this project uses for both button commands and the temperature reading.
+  *Acknowledged* messages wait for a receipt (one-off, must-arrive
+  commands). *Burst* messages stream larger payloads. Every broadcast
+  message is a fixed 8-byte payload, called a **page**, whose first byte
+  usually identifies the page type.
+- **Device profiles.** ANT+ standardizes the page byte layout per device
+  category (Heart Rate Monitor, Bike Power, **Controls** — remote controls
+  like the Edge Remote, covering four use-cases: Audio/Video/**Generic**/
+  Keypad, **Environment** — ambient sensors, etc.), identified by a numeric
+  **device type**. Conceptually similar to a BLE GATT service, but far
+  simpler: no characteristics/descriptors, just a small set of
+  fixed-format 8-byte pages repeated on a schedule.
+- **Why ANT+ instead of BLE for the Garmin side?** Garmin Edge units
+  support both, but their whole accessory ecosystem (sensors, remotes) is
+  ANT+-based, and the official Edge Remote itself is an ANT+ Controls
+  (Generic) device — matching that is what makes this remote behave like a
+  "real" Garmin accessory instead of a one-off custom integration.
+
+See "Garmin Edge communication (ANT+)" below for how this project's two
+use cases (button commands, temperature broadcast) map onto these
+concepts, and the implementation notes further down for what's actually
+needed to build and license this on real hardware.
+
+### Garmin Edge communication (ANT+)
+ANT+ is used for two purposes, both from the same radio/module. **Naming
+correction** (see "ANT+ implementation notes" at the end of this document
+for full sourcing): the official ANT+ profile name is **Controls**, which
+bundles four use-cases (Audio, Video, **Generic**, Keypad) — "Generic
+Controls" as used in earlier revisions of this document was an informal
+shorthand, not the profile's real name. Similarly the temperature profile
+is officially named **Environment**, not "Environment Sensor."
+
+1. **Remote control** — ANT+ **Controls** profile, **Generic** use-case
+   (the same one used by the official Garmin *Edge Remote* accessory).
+   - Commands are expected to be sent as a **Page 73** command page with a
+     corresponding key code (page right / page left / lap) — **this exact
+     page number/byte layout is asserted from general background
+     knowledge and has NOT been independently verified against the
+     official ANT+ Controls device profile document**, which requires a
+     free ANT+ Adopter account to access (see implementation notes).
+     Treat "Page 73" as plausible, not confirmed, until checked against
+     that document.
    - Edge Explore confirmed compatible with ANT+ and with the Edge Remote
-     accessory (same profile).
+     accessory (same profile) — this part is a product-compatibility fact
+     from Garmin's own accessory listings, not the page-format claim above.
 2. **Temperature broadcast** — the internal die temperature (see
    "Thermometer" above) is sent so the Edge can show it as a data field.
-   - Expected profile: ANT+ **Environment Sensor** (temperature), the
-     common device type Garmin Edge units already recognize for ambient
-     temperature accessories — **to be confirmed** against the ANT+
-     specification once the ANT stack is available.
+   - Expected profile: ANT+ **Environment** (temperature), the profile
+     Garmin Edge units recognize for ambient temperature accessories —
+     the exact page/byte layout is likewise **to be confirmed** against
+     the ANT+ Environment device profile document (Adopter account
+     required).
    - **Broadcast policy (decided)**: idle by default; **any** button press
      (camera or Garmin) arms a session that sends a reading every 5 minutes
      for up to 30 minutes since the last press, then returns to idle — see
@@ -174,9 +251,9 @@ ANT+ is used for two purposes, both from the same radio/module:
      transmissions still happen sequentially/one-protocol-at-a-time, just
      scheduled a few minutes later rather than piggybacked on an
      already-open ANT+ link.
-   - **Open question**: whether the Generic Controls channel and the
-     Environment Sensor broadcast need to run as two separate concurrent
-     ANT+ channels (channel count depends on the ANT stack/SoftDevice
+   - **Open question**: whether the Controls channel and the Environment
+     broadcast need to run as two separate concurrent ANT+ channels
+     (channel count depends on the ANT stack/SoftDevice
      chosen) or can be combined, is **to be confirmed** once the ANT+
      stack is obtained.
 
@@ -274,6 +351,14 @@ ANT+ is used for two purposes, both from the same radio/module:
 
 ## 4. Open points / to be decided
 
+- **ANT+ toolchain/chip decision (blocking, see "ANT+ implementation
+  notes" at the end of this document)**: the nRF52832 used in this
+  project is not currently supported by Nordic's Zephyr-based ANT+
+  add-on (only nRF52840/nRF5340 are) — real ANT+ code cannot be written
+  against the existing Zephyr firmware as-is. Needs a decision between
+  porting to the classic nRF5 SDK on the current chip, moving to a
+  supported chip (nRF52840/nRF5340, a hardware change), or reconsidering
+  ANT+ entirely, before any further ANT+ implementation work.
 - **Mobile app configuration transport**: confirm BLE (vs. "classic
   Bluetooth", listed only as a placeholder — see "Remote configuration"
   above) and define the Configuration Service (session trigger, exposed
@@ -289,9 +374,11 @@ ANT+ is used for two purposes, both from the same radio/module:
   internal temperature sensor) remains compatible with a future addition
   (HT1621 segment LCD already studied).
 - **ANT+ temperature broadcast profile**: confirm the exact ANT+ Environment
-  Sensor page/device-type used, and whether it needs its own ANT+ channel
-  alongside the Generic Controls channel (concurrent channel count depends
-  on the ANT stack/SoftDevice chosen — not obtained yet).
+  page/device-type used, and whether it needs its own ANT+ channel
+  alongside the Controls (Generic) channel (concurrent channel count
+  depends on the ANT stack/toolchain chosen — see "ANT+ implementation
+  notes" below, this is now blocked on a real chip/SDK decision, not just
+  "not obtained yet").
 - **Temperature broadcast timing values**: the 5-minute interval / 30-minute
   session length are example defaults (`TEMP_BROADCAST_INTERVAL_MIN`,
   `TEMP_SESSION_DURATION_MIN` in `ant_garmin.c`) — the overall
@@ -426,3 +513,120 @@ using a standalone BLE host stack directly on top of FreeRTOS (e.g. Apache
 NimBLE, or a chip vendor's proprietary BLE SDK) — Zephyr just ships one
 (its own native BLE Host) already integrated with the kernel and
 devicetree, so you don't wire it up yourself.
+
+---
+
+## 6. ANT+ implementation notes
+
+Before writing real ANT+ radio code, background research (web search
+against Nordic/ANT+ Alliance public sources, sourced below) surfaced a
+**toolchain/chip gap that blocks the straightforward path** of just adding
+ANT+ calls to the existing Zephyr firmware. This section documents that
+finding, the licensing process, and the API surface — captured now so the
+next step (picking a path forward) is an informed decision rather than a
+guess baked into code.
+
+### The core finding: nRF52832 isn't (yet) supported by Zephyr's ANT+ add-on
+Nordic ships ANT+ support for the Zephyr-based nRF Connect SDK — the
+toolchain this project's BLE code already uses — as a **separate add-on
+repository**, "ANT for nRF Connect SDK" (`ant-nrfconnect/sdk-ant` on
+GitHub; docs at ant-nrfconnect.github.io). Support was rolled out per-chip:
+the nRF5340 first, then nRF52840 (released alongside nRF Connect SDK
+v2.6, ~March 2024). **The nRF52832 used in this project (Ebyte
+E73-2G4M08S1E) is not on the supported list.** A Nordic engineer confirmed
+on DevZone that ANT/ANT+ was "not yet available on the nRF52-series" in
+NCS (only nRF53 at the time), and a January 2025 DevZone thread titled
+*"Add ANT support to nRF52832 with nRF Connect SDK v2.9.0"* indicates it
+still wasn't as of that SDK version, consistent with the official v1.3.0
+release notes stating the add-on is "production ready for nRF5340 and
+nRF52840" only.
+[Getting Started](https://www.thisisant.com/APIassets/1.1.0_ANTnRFConnectDoc/doc/getting_started.html) ·
+[DevZone #107934](https://devzone.nordicsemi.com/f/nordic-q-a/107934/add-ant-central-function-to-nrf52840-with-nrf-connect-sdk) ·
+[DevZone #118127](https://devzone.nordicsemi.com/f/nordic-q-a/118127/add-ant-support-to-nrf52832-with-nrf-connect-sdk-v2-9-0) ·
+[v1.3.0 release notes](https://www.thisisant.com/APIassets/ANTnRFConnectDoc/doc/releases/release-notes-1.3.0.html)
+
+Separately, the **older, non-Zephyr "nRF5 SDK"** (classic C SDK, its own
+build system, no `west`/CMake/Zephyr) *does* support ANT+ on the nRF52832,
+via the **S212** (ANT-only) or **S332** (BLE+ANT+ concurrent) SoftDevices —
+Nordic/ANT+ Alliance bulletins explicitly confirm these are available for
+the nRF52832.
+[S212 product page](https://www.nordicsemi.com/Products/Development-software/S212-ANT) ·
+[tech bulletin](https://www.thisisant.com/developer/resources/tech-bulletin/updated-s212-and-s332-v091-ant-protocol-stacks-now-available-for-nordic-n)
+
+**This corrects earlier revisions of this document and of the firmware
+comments**, which described "SoftDevice S212/S332 or the nRF5 SDK ANT
+module" as if they were interchangeable options for the same toolchain.
+They're actually the same (older) generation of tooling. The real fork in
+the road is: **nRF5 SDK (old, non-Zephyr, nRF52832-capable) vs. "ANT for
+nRF Connect SDK" (new, Zephyr, currently nRF52840/nRF5340-only)** — and
+this project's existing Zephyr BLE firmware cannot pull in ANT+ on its
+current chip without either changing chip or splitting the toolchain.
+
+### Options going forward (not yet decided)
+1. **Port to the classic nRF5 SDK for the ANT+ side, on the current
+   nRF52832.** Likely means either a second, separate firmware
+   image/toolchain alongside the existing Zephyr one (nRF5 SDK doesn't
+   use `west`/CMake), or migrating the whole project off Zephyr onto nRF5
+   SDK — which would mean redoing the BLE (`ble_gopro.c`) and sensor
+   (`temp_sensor.c`) code against a different set of APIs, losing the
+   Zephyr-specific work already done.
+2. **Move the target chip to nRF52840 or nRF5340**, both supported by the
+   Zephyr ANT+ add-on today. Keeps one unified Zephyr toolchain — the
+   existing `ble_gopro.c`/`ant_garmin.c`/`temp_sensor.c` structure would
+   mostly carry over, adding `ant_*` calls (see API surface below) instead
+   of a second toolchain. This is a **hardware change**: new module
+   footprint/pinout, KiCad schematic/PCB rework — the current design is
+   built around the E73-2G4M08S1E (nRF52832).
+3. **Reconsider whether ANT+ is required at all** for the Garmin side, e.g.
+   evaluate what BLE-based remote-control capability (if any) current
+   Garmin Edge firmware supports as an alternative. Not researched yet —
+   flagged as a question, not a verified option.
+
+No option has been chosen. This needs a decision before any real
+`sd_ant_*`/`ant_*` calls are written into `ant_garmin.c` — writing code
+against the wrong toolchain would be wasted or actively misleading work.
+
+### Licensing & cost (confirmed)
+- A free **"ANT+ Adopter"** signup at thisisant.com grants the ANT+
+  network key, the ANT+ device profile documents (needed to confirm the
+  exact page layouts flagged as unverified elsewhere in this document —
+  see "Garmin Edge communication (ANT+)"), forum access, and a
+  shared-source license for commercial ANT+ products. This is the right
+  first step regardless of which option above is chosen.
+  [Licensing](https://www.thisisant.com/developer/ant/licensing) ·
+  [Network Keys](https://www.thisisant.com/developer/ant-plus/ant-plus-basics/network-keys)
+- A separate, paid **"ANT+ Membership"** (~$1,500 USD/yr) exists for
+  Technical Working Group participation and pre-release profile access —
+  **not needed** for this project.
+- **Shipping a commercial product is not free**: on the nRF52-series ANT+
+  protocol stack, evaluation/non-commercial use is free
+  (`CONFIG_ANT_EVALUATION_KEY`), but a commercial product requires a paid,
+  **per-unit royalty** license key (`CONFIG_ANT_LICENSE_KEY`). The exact
+  royalty amount is not publicly disclosed — get a quote from ANT Wireless
+  before committing to ANT+ for a product intended for sale.
+  [Licensing page](https://www.thisisant.com/developer/ant/licensing) ·
+  [`CONFIG_ANT_LICENSE_KEY` docs](https://www.thisisant.com/APIassets/ANTnRFConnectDoc/doc/kconfig/CONFIG_ANT_LICENSE_KEY.html)
+
+### API surface (confirmed to exist; not yet used in this codebase)
+Two differently-named APIs exist, matching the two toolchains above — do
+not mix them up when eventually writing real code:
+
+| Toolchain | Prefix | Example calls | Source |
+|---|---|---|---|
+| Classic nRF5 SDK (S212/S332) | `sd_ant_*` | `sd_ant_channel_assign`, `sd_ant_channel_id_set`, `sd_ant_channel_radio_freq_set`, `sd_ant_channel_period_set`, `sd_ant_channel_open`, `sd_ant_broadcast_message_tx` | Public GitHub mirrors of the nRF5 SDK, e.g. [particle-iot/nrf5_sdk example](https://github.com/particle-iot/nrf5_sdk/blob/master/examples/ant/ant_relay_demo/main.c) |
+| ANT for nRF Connect SDK (Zephyr) | `ant_*` (no `sd_` prefix) | `ant_stack_init`, `ant_stack_reset`, `ant_network_address_set`, `ant_channel_assign`, `ant_channel_id_set`, `ant_channel_radio_freq_set`, `ant_channel_period_set`, `ant_channel_open`, `ant_broadcast_message_tx`, `ant_event_get` | [ANT Interface Reference](https://www.thisisant.com/APIassets/1.1.0_ANTnRFConnectDoc/doc/api/interface.html) |
+
+The nRF5 SDK zip (bundling `ant_interface.h` and the S212/S332 SoftDevice
+binaries) appears to be a plain download from Nordic's site without a
+clear account gate, but this wasn't conclusively confirmed either way.
+[Download page](https://www.nordicsemi.com/Products/Development-software/nRF5-SDK/Download)
+
+### What's still unverified
+- The exact byte layout of the Controls (Generic) command page and the
+  Environment temperature page — both require the free ANT+ Adopter login
+  to access officially; not found from a public, unauthenticated source
+  in this research pass. The "Page 73" figure used elsewhere in this
+  document is background knowledge, not independently confirmed.
+- Whether nRF52832 support for the Zephyr ANT+ add-on is on any public
+  roadmap, or permanently excluded.
+- Whether the nRF5 SDK download truly requires no account.

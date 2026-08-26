@@ -9,7 +9,7 @@ and the main file only knows about the button/action state machine.
 |------|------|
 | `src/main.c` | Main finite-state machine: button GPIO/interrupt setup, action queue, dispatch to the modules below. No BLE/ANT+ API usage. |
 | `src/ble_gopro.[ch]` | BLE central role driver for the GoPro (Open GoPro API): stack init, bonding, scan/connect, GATT discovery, shutter command. |
-| `src/ant_garmin.[ch]` | ANT+ driver for the Garmin Edge: Generic Controls (button) commands, plus the temperature broadcast session (idle by default; any button press arms a bounded, periodic broadcast — see below). ANT+ transmission itself is currently a stub. |
+| `src/ant_garmin.[ch]` | ANT+ driver for the Garmin Edge: Controls-profile (Generic) button commands, plus the temperature broadcast session (idle by default; any button press arms a bounded, periodic broadcast — see below). ANT+ transmission itself is currently a stub, blocked on a toolchain/chip decision — see below. |
 | `src/temp_sensor.[ch]` | Reads the nRF52832's internal die temperature sensor (no external thermistor). Called internally by `ant_garmin.c`'s broadcast timer. |
 
 ## What this firmware does today
@@ -58,15 +58,21 @@ point, not a validated binary.
 
 ## What's still missing (intentionally, see prior discussion)
 1. **ANT+ transmission itself (3 Garmin buttons + temperature broadcast)**:
-   requires Nordic's proprietary ANT stack (SoftDevice S212/S332 or the
-   nRF5 SDK ANT module), under a separate license from Nordic/ANT+
-   Alliance. Not included here — `ant_garmin_handle_button()` and the
-   internal `ant_garmin_send_temperature()` are stubs that just log a
-   warning, to be completed once the ANT stack is obtained. The session
-   *timing* (see "Temperature broadcast session" above) already runs; the
-   exact ANT+ profile for the temperature broadcast (expected:
-   Environment Sensor) and whether it needs its own channel alongside
-   Generic Controls are open questions — see the specs doc.
+   currently blocked on a **toolchain/chip decision**, not just a
+   licensing step — the nRF52832 used here isn't supported by Nordic's
+   Zephyr-based ANT+ add-on (only nRF52840/nRF5340 are); ANT+ on this chip
+   needs the older, separate nRF5 SDK (S212/S332 SoftDevice), a different
+   toolchain from the Zephyr one the rest of this firmware is built on.
+   See `doc/gopro_garmin_remote_specs.md`, "ANT+ implementation notes" for
+   the full finding, sources, and the options being weighed (port to nRF5
+   SDK / change chip / reconsider ANT+) — nothing is decided yet.
+   `ant_garmin_handle_button()` and the internal
+   `ant_garmin_send_temperature()` remain stubs that just log a warning
+   until that's resolved. The session *timing* (see "Temperature
+   broadcast session" above) already runs independently of it. The exact
+   ANT+ page layout for both the button commands (Controls profile,
+   Generic use-case) and the temperature broadcast (Environment profile)
+   is also unverified — see the specs doc.
 2. **Fine-grained power management (System OFF)**: the dongle is
    USB-powered during testing, so not critical right now. Needs to be
    revisited for the final CR2032 version (see the "wake on PORT event"

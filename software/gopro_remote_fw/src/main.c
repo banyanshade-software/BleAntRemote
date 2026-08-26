@@ -29,9 +29,12 @@
  *
  * What this firmware does NOT do (to be added later) :
  *   - ANT+ (Garmin page right/left/lap buttons, and the temperature
- *     broadcast) : requires Nordic's proprietary ANT stack (SoftDevice
- *     S212/S332 or the nRF5 SDK ANT module), under a separate license
- *     from Nordic/ANT+ Alliance. Not included here. The Garmin buttons
+ *     broadcast) : blocked on a toolchain/chip decision, not just a
+ *     licensing step - the nRF52832 used here isn't supported by
+ *     Nordic's Zephyr-based ANT+ add-on (only nRF52840/nRF5340 are);
+ *     ANT+ on this chip needs the older, separate nRF5 SDK (S212/S332
+ *     SoftDevice) instead. See doc/gopro_garmin_remote_specs.md, "ANT+
+ *     implementation notes". Not included here. The Garmin buttons
  *     and the temperature broadcast are wired to stubs (see
  *     ant_garmin.c) in the meantime. The 3 Garmin buttons themselves
  *     are not wired to GPIOs/actions yet either (see README).
