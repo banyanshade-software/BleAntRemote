@@ -1,31 +1,31 @@
 /*
- * gopro_remote - firmware de demarrage pour nRF52840 Dongle
+ * gopro_remote - bring-up firmware for the nRF52840 Dongle
  * ==========================================================
  *
- * Ce que fait ce firmware (fonctionnel) :
- *   - Scanne et se connecte a une GoPro (filtre sur le service BLE
- *     0xFEA6, celui annonce par les GoPro compatibles Open GoPro).
- *   - Effectue le bonding (pairing securise), obligatoire pour parler
- *     a la GoPro. Les cles sont persistees en flash (CONFIG_SETTINGS),
- *     donc les connexions suivantes n'auront plus besoin de re-pairer.
- *   - Decouvre les caracteristiques GP-0072 (Command) et GP-0073
- *     (Command Response), s'abonne aux notifications de GP-0073.
- *   - Sur appui du bouton "Camera ON" -> ecrit la commande shutter=1.
- *     Sur appui du bouton "Camera OFF" -> ecrit la commande shutter=0.
+ * What this firmware does (functional) :
+ *   - Scans for and connects to a GoPro (filtering on the BLE service
+ *     0xFEA6, advertised by Open GoPro compatible GoPros).
+ *   - Performs bonding (secure pairing), required to talk to the
+ *     GoPro. Keys are persisted to flash (CONFIG_SETTINGS), so
+ *     subsequent connections won't need to re-pair.
+ *   - Discovers the GP-0072 (Command) and GP-0073 (Command Response)
+ *     characteristics, subscribes to GP-0073 notifications.
+ *   - On "Camera ON" button press -> writes the shutter=1 command.
+ *     On "Camera OFF" button press -> writes the shutter=0 command.
  *
- * Ce que ce firmware NE fait PAS (a ajouter plus tard) :
- *   - ANT+ (boutons Garmin page droite/gauche/tour) : necessite la pile
- *     ANT proprietaire de Nordic (SoftDevice S212/S332 ou module ANT du
- *     nRF5 SDK), sous licence separee aupres de Nordic/ANT+ Alliance.
- *     Non incluse ici. Le code des 3 boutons Garmin est laisse en stub
- *     (voir handle_garmin_button()) en attendant.
- *   - Gestion fine de la consommation (System OFF entre connexions) :
- *     le dongle est alimente par USB, donc pas critique pour les tests,
- *     mais a reprendre pour la version finale sur CR2032.
- *   - Lecture thermistance / tension batterie (ADC) : pas cablee sur le
- *     dongle nu, a ajouter avec le vrai boitier.
+ * What this firmware does NOT do (to be added later) :
+ *   - ANT+ (Garmin page right/left/lap buttons) : requires Nordic's
+ *     proprietary ANT stack (SoftDevice S212/S332 or the nRF5 SDK ANT
+ *     module), under a separate license from Nordic/ANT+ Alliance.
+ *     Not included here. The code for the 3 Garmin buttons is left as
+ *     a stub (see handle_garmin_button()) in the meantime.
+ *   - Fine-grained power management (System OFF between connections) :
+ *     the dongle is USB-powered, so not critical for testing, but
+ *     needs to be revisited for the final CR2032 version.
+ *   - Thermistor / battery voltage reading (ADC) : not wired on the
+ *     bare dongle, to be added with the real enclosure.
  *
- * Pinout GPIO boutons : voir boards/nrf52840dongle_nrf52840.overlay
+ * Button GPIO pinout : see boards/nrf52840dongle_nrf52840.overlay
  */
 
 #include <zephyr/kernel.h>
@@ -44,13 +44,13 @@
 LOG_MODULE_REGISTER(gopro_remote, LOG_LEVEL_INF);
 
 /* -------------------------------------------------------------------
- * UUIDs Open GoPro (confirmes via la doc officielle + implementations
- * de reference) :
- *   - Service annonce en BLE (16 bits)         : 0xFEA6
- *   - Base 128 bits utilisee par toutes les     : b5f9XXXX-aa8d-11e3-
- *     caracteristiques GoPro (XXXX = le numero)   9046-0002a5d5c51b
- *   - GP-0072 = Command (ecriture)
- *   - GP-0073 = Command Response (notification)
+ * Open GoPro UUIDs (confirmed via the official docs + reference
+ * implementations) :
+ *   - Service advertised over BLE (16-bit)      : 0xFEA6
+ *   - 128-bit base used by all GoPro             : b5f9XXXX-aa8d-11e3-
+ *     characteristics (XXXX = the number)          9046-0002a5d5c51b
+ *   - GP-0072 = Command (write)
+ *   - GP-0073 = Command Response (notify)
  * ------------------------------------------------------------------- */
 
 
@@ -66,24 +66,24 @@ LOG_MODULE_REGISTER(gopro_remote, LOG_LEVEL_INF);
 static struct bt_uuid_128 uuid_gopro_cmd = BT_UUID_INIT_128(BT_UUID_GOPRO_CMD_VAL);
 static struct bt_uuid_128 uuid_gopro_cmd_rsp = BT_UUID_INIT_128(BT_UUID_GOPRO_CMD_RSP_VAL);
 
-/* Commande TLV "Set Shutter" : [Longueur][ID commande 0x01][param] */
+/* "Set Shutter" TLV command : [Length][Command ID 0x01][param] */
 static const uint8_t SHUTTER_ON[]  = { 0x03, 0x01, 0x01, 0x01 };
 static const uint8_t SHUTTER_OFF[] = { 0x03, 0x01, 0x01, 0x00 };
 
 /* -------------------------------------------------------------------
- * Etat de connexion / decouverte GATT
+ * Connection / GATT discovery state
  * ------------------------------------------------------------------- */
 static struct bt_conn *gopro_conn;
-static uint16_t cmd_handle;       /* handle de la caracteristique GP-0072 */
-static uint16_t cmd_rsp_handle;   /* handle de la caracteristique GP-0073 */
+static uint16_t cmd_handle;       /* GP-0072 characteristic handle */
+static uint16_t cmd_rsp_handle;   /* GP-0073 characteristic handle */
 static uint16_t cmd_rsp_ccc_handle;
-static bool gopro_ready;          /* true une fois pret a recevoir des commandes */
+static bool gopro_ready;          /* true once ready to receive commands */
 
 static struct bt_gatt_discover_params discover_params;
 static struct bt_gatt_subscribe_params subscribe_params;
 
 /* -------------------------------------------------------------------
- * Boutons (gpio-keys via devicetree)
+ * Buttons (gpio-keys via devicetree)
  * ------------------------------------------------------------------- */
 #define BTN_CAM_ON_NODE  DT_ALIAS(sw_cam_on)
 #define BTN_CAM_OFF_NODE DT_ALIAS(sw_cam_off)
@@ -103,7 +103,7 @@ static struct gpio_callback btn_cam_on_cb __attribute__((unused));
 static struct gpio_callback btn_cam_off_cb __attribute__((unused));
 static struct gpio_callback btn_sw1_cb;
 
-/* File d'attente d'actions a traiter en dehors du contexte interruption */
+/* Action queue processed outside of interrupt context */
 enum remote_action {
 	ACTION_CAM_ON,
 	ACTION_CAM_OFF,
@@ -112,12 +112,12 @@ enum remote_action {
 K_MSGQ_DEFINE(action_msgq, sizeof(enum remote_action), 8, 4);
 
 /* -------------------------------------------------------------------
- * Envoi d'une commande shutter (une fois la GoPro prete)
+ * Send a shutter command (once the GoPro is ready)
  * ------------------------------------------------------------------- */
 static void gopro_send_shutter(bool on)
 {
 	if (!gopro_ready || gopro_conn == NULL) {
-		LOG_WRN("GoPro non connectee / non prete, commande ignoree");
+		LOG_WRN("GoPro not connected / not ready, command ignored");
 		return;
 	}
 
@@ -126,45 +126,45 @@ static void gopro_send_shutter(bool on)
 						  payload, sizeof(SHUTTER_ON),
 						  false);
 	if (err) {
-		LOG_ERR("Echec ecriture commande shutter (%d)", err);
+		LOG_ERR("Failed to write shutter command (%d)", err);
 	} else {
-		LOG_INF("Commande shutter %s envoyee", on ? "ON" : "OFF");
+		LOG_INF("Shutter command %s sent", on ? "ON" : "OFF");
 	}
 }
 
-/* Stub pour les futurs boutons Garmin (ANT+, pas encore implemente) */
+/* Stub for the future Garmin buttons (ANT+, not implemented yet) */
 static void handle_garmin_button(const char *which) __attribute__((unused));
 static void handle_garmin_button(const char *which)
 {
-	LOG_WRN("Bouton Garmin '%s' presse - ANT+ non implemente pour l'instant",
+	LOG_WRN("Garmin button '%s' pressed - ANT+ not implemented yet",
 		which);
 }
 
 /* -------------------------------------------------------------------
- * Callbacks GATT : notification de reponse (GP-0073)
+ * GATT callbacks : response notification (GP-0073)
  * ------------------------------------------------------------------- */
 static uint8_t on_cmd_rsp_notify(struct bt_conn *conn,
 				  struct bt_gatt_subscribe_params *params,
 				  const void *data, uint16_t length)
 {
 	if (!data) {
-		LOG_INF("Desabonnement de GP-0073");
+		LOG_INF("Unsubscribed from GP-0073");
 		return BT_GATT_ITER_STOP;
 	}
-	LOG_HEXDUMP_INF(data, length, "Reponse GoPro (GP-0073) :");
+	LOG_HEXDUMP_INF(data, length, "GoPro response (GP-0073):");
 	return BT_GATT_ITER_CONTINUE;
 }
 
 /* -------------------------------------------------------------------
- * Decouverte GATT : on cherche le service GoPro, puis ses 2
- * caracteristiques, puis on s'abonne a la notification de reponse.
+ * GATT discovery : look up the GoPro service, then its 2
+ * characteristics, then subscribe to the response notification.
  * ------------------------------------------------------------------- */
 static uint8_t discover_func(struct bt_conn *conn,
 			      const struct bt_gatt_attr *attr,
 			      struct bt_gatt_discover_params *params)
 {
 	if (!attr) {
-		LOG_INF("Decouverte GATT terminee");
+		LOG_INF("GATT discovery complete");
 		memset(params, 0, sizeof(*params));
 		return BT_GATT_ITER_STOP;
 	}
@@ -174,12 +174,12 @@ static uint8_t discover_func(struct bt_conn *conn,
 
 		if (bt_uuid_cmp(chrc->uuid, &uuid_gopro_cmd.uuid) == 0) {
 			cmd_handle = chrc->value_handle;
-			LOG_INF("GP-0072 (Command) trouve, handle=%u", cmd_handle);
+			LOG_INF("GP-0072 (Command) found, handle=%u", cmd_handle);
 		} else if (bt_uuid_cmp(chrc->uuid, &uuid_gopro_cmd_rsp.uuid) == 0) {
 			cmd_rsp_handle = chrc->value_handle;
-			/* Le CCC descriptor suit generalement juste apres */
+			/* The CCC descriptor usually follows right after */
 			cmd_rsp_ccc_handle = chrc->value_handle + 1;
-			LOG_INF("GP-0073 (Command Response) trouve, handle=%u",
+			LOG_INF("GP-0073 (Command Response) found, handle=%u",
 				cmd_rsp_handle);
 		}
 	}
@@ -196,16 +196,16 @@ static void start_subscribe(struct bt_conn *conn)
 
 	int err = bt_gatt_subscribe(conn, &subscribe_params);
 	if (err && err != -EALREADY) {
-		LOG_ERR("Echec abonnement notification GP-0073 (%d)", err);
+		LOG_ERR("Failed to subscribe to GP-0073 notifications (%d)", err);
 	} else {
-		LOG_INF("Abonne aux notifications GP-0073 - GoPro prete");
+		LOG_INF("Subscribed to GP-0073 notifications - GoPro ready");
 		gopro_ready = true;
 	}
 }
 
 static void start_discovery(struct bt_conn *conn)
 {
-	discover_params.uuid = NULL; /* toutes les caracteristiques du service */
+	discover_params.uuid = NULL; /* all characteristics of the service */
 	discover_params.func = discover_func;
 	discover_params.start_handle = 0x0001;
 	discover_params.end_handle = 0xffff;
@@ -213,13 +213,13 @@ static void start_discovery(struct bt_conn *conn)
 
 	int err = bt_gatt_discover(conn, &discover_params);
 	if (err) {
-		LOG_ERR("Echec demarrage decouverte GATT (%d)", err);
+		LOG_ERR("Failed to start GATT discovery (%d)", err);
 		return;
 	}
 }
 
 /* -------------------------------------------------------------------
- * Callbacks de connexion
+ * Connection callbacks
  * ------------------------------------------------------------------- */
 static void connected(struct bt_conn *conn, uint8_t err)
 {
@@ -232,17 +232,17 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	LOG_INF("Connected to  GoPro");
 	gopro_conn = bt_conn_ref(conn);
 
-	/* Demande de securite = bonding (obligatoire pour Open GoPro) */
+	/* Security request = bonding (required for Open GoPro) */
 	LOG_INF("security/bonding request L2...");
 	int sec_err = bt_conn_set_security(conn,  BT_SECURITY_L2);
 	if (sec_err) {
-		LOG_ERR("Echec demande de securite/bonding (%d)", sec_err);
+		LOG_ERR("Failed to request security/bonding (%d)", sec_err);
 	}
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
-	LOG_INF("Deconnected (raison %u)", reason);
+	LOG_INF("Disconnected (reason %u)", reason);
 	gopro_ready = false;
 	cmd_handle = 0;
 	cmd_rsp_handle = 0;
@@ -259,7 +259,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 		LOG_ERR("security_changed Error  (%d)", err);
 		return;
 	}
-	LOG_INF("Lien securise (bonding OK), niveau %d - decouverte GATT...", level);
+	LOG_INF("Link secured (bonding OK), level %d - GATT discovery...", level);
 	start_discovery(conn);
 }
 
@@ -269,13 +269,13 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.security_changed = security_changed,
 };
 
-/* Une fois GP±-0072 ET GP-0073 trouves, on peut s'abonner. On verifie
- * ca simplement en pollant apres chaque decouverte terminee (cf boucle
- * principale) plutot que par un evenement dedie, pour rester simple. */
+/* Once both GP-0072 and GP-0073 have been found, we can subscribe. This
+ * is simply checked by polling after each discovery completes (see the
+ * main loop) rather than via a dedicated event, to keep things simple. */
 
 /* -------------------------------------------------------------------
- * Scan : on filtre sur le service GoPro (0xFEA6) pour ne pas se
- * connecter a n'importe quel peripherique BLE alentour.
+ * Scan : filter on the GoPro service (0xFEA6) so we don't connect to
+ * any random BLE peripheral nearby.
  * ------------------------------------------------------------------- */
 static bool ad_has_gopro_service(struct bt_data *data, void *user_data)
 {
@@ -298,11 +298,11 @@ static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 		     struct net_buf_simple *ad)
 {
 	if (gopro_conn) {
-		return; /* deja connecte, on ignore */
+		return; /* already connected, ignore */
 	}
 
 	bool is_gopro = false;
-	struct net_buf_simple ad_copy = *ad; /* bt_data_parse consomme le buffer */
+	struct net_buf_simple ad_copy = *ad; /* bt_data_parse consumes the buffer */
 	bt_data_parse(&ad_copy, ad_has_gopro_service, &is_gopro);
 
 	if (!is_gopro) {
@@ -324,12 +324,12 @@ static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 	struct bt_conn *conn = NULL;
 	int err = bt_conn_le_create(addr, &create_param, BT_LE_CONN_PARAM_DEFAULT, &conn);
 	if (err) {
-		LOG_ERR("bt_conn_le_create a echoue (%d)", err);
+		LOG_ERR("bt_conn_le_create failed (%d)", err);
 		start_scan();
 		return;
 	}
-	/* on relache tout de suite la reference locale : connected()
-	 * prendra SA propre reference si la connexion aboutit */
+	/* release the local reference right away: connected() will take
+	 * its OWN reference if the connection succeeds */
 	bt_conn_unref(conn);
 }
 
@@ -352,8 +352,8 @@ static void start_scan(void)
 }
 
 /* -------------------------------------------------------------------
- * Boutons : ISR -> poste juste un evenement dans la queue, tout le
- * travail (BLE) se fait dans la boucle principale (thread normal).
+ * Buttons : ISR -> just posts an event to the queue, all the (BLE)
+ * work happens in the main loop (normal thread).
  * ------------------------------------------------------------------- */
 
 
@@ -378,7 +378,7 @@ static int setup_buttons(void)
 	int err;
 
 	/*if (!gpio_is_ready_dt(&btn_cam_on) || !gpio_is_ready_dt(&btn_cam_off)) {
-		LOG_ERR("GPIO boutons non pretes");
+		LOG_ERR("Button GPIOs not ready");
 		return -ENODEV;
 	}*/
 	if (!gpio_is_ready_dt(&btn_sw1)) {
@@ -395,7 +395,7 @@ static int setup_buttons(void)
 	err = gpio_pin_configure_dt(&btn_sw1, GPIO_INPUT);
 	err |= gpio_pin_interrupt_configure_dt(&btn_sw1, GPIO_INT_EDGE_TO_ACTIVE);
 	if (err) {
-		LOG_ERR("Config GPIO boutons echouee (%d)", err);
+		LOG_ERR("Button GPIO configuration failed (%d)", err);
 		return err;
 	}
 
@@ -412,7 +412,7 @@ static int setup_buttons(void)
 }
 
 
-/* --- Callbacks d'authentification : declare nos capacites IO --- */
+/* --- Authentication callbacks: declares our IO capabilities --- */
 static void auth_cancel(struct bt_conn *conn)
 {
 	LOG_INF("Pairing canceled");
@@ -420,34 +420,34 @@ static void auth_cancel(struct bt_conn *conn)
 
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
-	LOG_INF("Pairing termine, bonded=%d", bonded);
+	LOG_INF("Pairing complete, bonded=%d", bonded);
 }
 
 static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 {
-	LOG_ERR("Pairing echoue, raison=%d", reason);
+	LOG_ERR("Pairing failed, reason=%d", reason);
 }
 
 
 static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
 {
-	LOG_INF("Passkey affiche (aucun ecran reel) : %06u", passkey);
+	LOG_INF("Passkey displayed (no real screen): %06u", passkey);
 }
 
 static void auth_passkey_confirm(struct bt_conn *conn, unsigned int passkey)
 {
-	LOG_INF("Passkey a confirmer : %06u (auto-confirmation)", passkey);
+	LOG_INF("Passkey to confirm: %06u (auto-confirm)", passkey);
 	bt_conn_auth_passkey_confirm(conn);
 }
 
 static struct bt_conn_auth_cb auth_cb = {
-	.passkey_display = auth_passkey_display,   /* <-- l'ajout manquant */
-	.passkey_confirm = auth_passkey_confirm,   /* <-- ajoute ceci */
+	.passkey_display = auth_passkey_display,
+	.passkey_confirm = auth_passkey_confirm,
 	.cancel = auth_cancel,
 };
-/* NoInputNoOutput -> pairing "Just Works", pas de MITM (pas d'ecran/clavier
- * sur notre dongle, et la GoPro ne demande qu'une confirmation physique
- * sur son propre ecran, pas de code a saisir cote client) 
+/* NoInputNoOutput -> "Just Works" pairing, no MITM protection (no
+ * screen/keyboard on our dongle, and the GoPro only asks for a physical
+ * confirmation on its own screen, no code to enter on the client side)
 static struct bt_conn_auth_cb auth_cb = {
 	.cancel = auth_cancel
 };
@@ -470,69 +470,69 @@ int main(void)
 {
 	int err;
 
-	LOG_INF("=== GoPro Remote (nRF52840 Dongle) - demarrage ===");
+	LOG_INF("=== GoPro Remote (nRF52840 Dongle) - starting ===");
 
 	err = setup_buttons();
 	if (err) {
-		LOG_ERR("Abandon : boutons non fonctionnels");
+		LOG_ERR("Aborting: buttons not functional");
 	}
 
 	err = bt_enable(NULL);
 	if (err) {
-		LOG_ERR("bt_enable() a echoue (%d)", err);
+		LOG_ERR("bt_enable() failed (%d)", err);
 		return 0;
 	}
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
 		if ((1) ) {
 			LOG_INF("+++ load settings");
-			settings_load(); /* recharge les cles de bonding sauvegardees */
+			settings_load(); /* reload saved bonding keys */
 		} else {
 			LOG_INF("+++ load settings disabled");
 		}
-		
+
 	}
 
 	err = bt_conn_auth_cb_register(&auth_cb);
 	if (err) {
-		LOG_ERR("bt_conn_auth_cb_register a echoue (%d)", err);
+		LOG_ERR("bt_conn_auth_cb_register failed (%d)", err);
 	}
 	LOG_INF("+++ register auth_cb");
 	err = bt_conn_auth_info_cb_register(&auth_info_cb);
 	if (err) {
-		LOG_ERR("bt_conn_auth_info_cb_register a echoue (%d)", err);
+		LOG_ERR("bt_conn_auth_info_cb_register failed (%d)", err);
 	}
 
 
 	start_scan();
 
-	/* Boucle principale : on traite les actions boutons. La
-	 * decouverte GATT / subscribe s'enchainent automatiquement via
-	 * les callbacks de connexion (voir security_changed ci-dessus). */
+	/* Main loop: process button actions. GATT discovery / subscribe
+	 * chain automatically via the connection callbacks (see
+	 * security_changed above). */
 	enum remote_action action;
 	while (1) {
 		if (k_msgq_get(&action_msgq, &action, K_MSEC(200)) == 0) {
 			switch (action) {
 			case ACTION_CAM_ON:
-				LOG_INF("Bouton Camera ON presse");
+				LOG_INF("Camera ON button pressed");
 				gopro_send_shutter(true);
 				break;
 			case ACTION_CAM_OFF:
-				LOG_INF("Bouton Camera OFF presse");
+				LOG_INF("Camera OFF button pressed");
 				gopro_send_shutter(false);
 				break;
 			}
 		}
 
-		/* Une fois la decouverte terminee (cmd_handle et
-		 * cmd_rsp_handle trouves) et pas encore abonnes, on
-		 * declenche l'abonnement. */
+		/* Once discovery is complete (cmd_handle and
+		 * cmd_rsp_handle found) and we're not subscribed yet,
+		 * trigger the subscription. */
 		if (gopro_conn && cmd_handle && cmd_rsp_handle && !gopro_ready
 		    && subscribe_params.value_handle == 0) {
 			start_subscribe(gopro_conn);
 		}
 
-		/* Si deconnecte, on relance le scan */
+		/* If disconnected, restart the scan */
 		if (!gopro_conn) {
 			static bool scanning;
 			if (!scanning) {
