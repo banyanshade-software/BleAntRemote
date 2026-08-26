@@ -23,6 +23,7 @@ enum gopro_rec_state {
 	GOPRO_REC_UNKNOWN = 0,
 	GOPRO_REC_STOPPED,
 	GOPRO_REC_STARTED,
+	GOPRO_REC_DISCOVERED, /* not recording but still connected (e.g. just powered on) */
 };
 
 /*

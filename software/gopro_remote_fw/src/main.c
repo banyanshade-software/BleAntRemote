@@ -73,7 +73,8 @@
 #include "ant_garmin.h"
 #include "temp_sensor.h"
 
-LOG_MODULE_REGISTER(gopro_remote, LOG_LEVEL_INF);
+//LOG_MODULE_REGISTER(gopro_remote, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(gopro_remote, LOG_LEVEL_DBG);
 
 /* -------------------------------------------------------------------
  * Buttons (gpio-keys via devicetree)
@@ -86,18 +87,20 @@ LOG_MODULE_REGISTER(gopro_remote, LOG_LEVEL_INF);
  * STATUS_RESULT are not button presses - see the status timer and
  * ble_gopro status callback further below - but they go through the
  * same queue so the FSM in main() stays single-threaded. */
-enum remote_action {
-	ACTION_CAM_ON,
-	ACTION_CAM_OFF,
-	ACTION_BTN_SW1,
-	ACTION_STATUS_TICK,
-	ACTION_STATUS_RES_CAM_ON,
-	ACTION_STATUS_RES_CAM_OFF,
+enum rmt_event {
+	EVENT_NONE = 0,
+	EVENT_CAM_ON = 1,
+	EVENT_CAM_OFF = 2,
+	EVENT_BTN_SW1 = 3,
+	EVENT_STATUS_TICK = 4,
+	EVENT_STATUS_RES_CAM_ON = 5,
+	EVENT_STATUS_RES_CAM_OFF = 6,
+	EVENT_CAM_DISCOVERED = 7	, /* GoPro connected but not recording (e.g. just powered on) */
 };
 
 
  struct remote_msg {
-        enum remote_action action;
+        enum rmt_event action;
  };
 
 K_MSGQ_DEFINE(action_msgq, sizeof(struct remote_msg), 8, 4);
@@ -112,7 +115,7 @@ K_MSGQ_DEFINE(action_msgq, sizeof(struct remote_msg), 8, 4);
 #define DEBOUNCE_MS 200
 struct button {
 	const struct gpio_dt_spec spec;
-	enum remote_action action;
+	enum rmt_event action;
 	const char *name;
 	struct gpio_callback cb;
 	int64_t last_press_ms;
@@ -120,17 +123,17 @@ struct button {
 
 static   struct button btn_cam_on = {
 	.spec = GPIO_DT_SPEC_GET(BTN_CAM_ON_NODE, gpios),
-	.action = ACTION_CAM_ON,
+	.action = EVENT_CAM_ON,
 	.name = "CAM_ON",
 };
 static  struct button btn_cam_off = {
 	.spec = GPIO_DT_SPEC_GET(BTN_CAM_OFF_NODE, gpios),
-	.action = ACTION_CAM_OFF,
+	.action = EVENT_CAM_OFF,
 	.name = "CAM_OFF",
 };
 static  struct button btn_sw1 = {
 	.spec = GPIO_DT_SPEC_GET(BTN_SW1_NODE, gpios),
-	.action = ACTION_BTN_SW1,
+	.action = EVENT_BTN_SW1,
 	.name = "SW1",
 };
 
@@ -192,8 +195,8 @@ static int setup_buttons(void)
 
 static void status_timer_handler(struct k_timer *timer)
 {
-	struct remote_msg msg = { .action = ACTION_STATUS_TICK };
-	LOG_DBG("TTT isr");
+	struct remote_msg msg = { .action = EVENT_STATUS_TICK };
+	//LOG_DBG("TTT isr");
 	k_msgq_put(&action_msgq, &msg, K_NO_WAIT);
 }
 
@@ -203,7 +206,21 @@ K_TIMER_DEFINE(status_timer, status_timer_handler, NULL);
 static void on_gopro_status(enum gopro_rec_state state)
 {
 	struct remote_msg msg = { 0 };
-	msg.action = (state == GOPRO_REC_STARTED) ? ACTION_STATUS_RES_CAM_ON : ACTION_STATUS_RES_CAM_OFF; ;
+	switch (state) {
+		case GOPRO_REC_STARTED:
+			msg.action = EVENT_STATUS_RES_CAM_ON;
+			break;
+		case GOPRO_REC_STOPPED:
+			msg.action = EVENT_STATUS_RES_CAM_OFF;
+			break;
+		case GOPRO_REC_DISCOVERED:
+			msg.action = EVENT_CAM_DISCOVERED;
+			break;
+		default:
+			LOG_ERR("on_gopro_status: unknown state %d", state);
+			return;
+	}
+	msg.action = (state == GOPRO_REC_STARTED) ? EVENT_STATUS_RES_CAM_ON : EVENT_STATUS_RES_CAM_OFF; ;
 	k_msgq_put(&action_msgq, &msg, K_NO_WAIT);
 }
 
@@ -258,8 +275,8 @@ int main(void)
 
 	ble_gopro_set_status_cb(on_gopro_status);
 	//k_timer_init(&status_timer, status_timer_handler, NULL);
-	LOG_DBG("TTT Starting status timer (1s period)");
-	k_timer_start(&status_timer, K_SECONDS(1), K_SECONDS(1));
+	//LOG_DBG("TTT Starting status timer (1s period)");
+	//k_timer_start(&status_timer, K_SECONDS(1), K_SECONDS(1));
 
 	enum rec_state rec_state = REC_UNKNOWN; /* start unknown, will be set by the first status poll */
 	bool status_query_sent = false; /* at most one status query outstanding */
@@ -271,9 +288,9 @@ int main(void)
 	while (1) {
 		k_msgq_get(&action_msgq, &msg, K_FOREVER);
 
-		enum remote_action action = msg.action;
+		enum rmt_event action = msg.action;
 
-		if (ACTION_BTN_SW1 == action) {
+		if (EVENT_BTN_SW1 == action) {
 			switch (rec_state) {
 				case REC_UNKNOWN:	//FALLTHRU
 				case REC_ON_SENT:	//FALLTHRU
@@ -282,16 +299,30 @@ int main(void)
 					/* ignore button presses until we know the camera's state (via the status poll) */
 					break;
 				case REC_OFF:
-					action = ACTION_CAM_ON;
+					action = EVENT_CAM_ON;
 					break;	
 				case REC_ON:
-					action = ACTION_CAM_OFF;
+					action = EVENT_CAM_OFF;
 					break;
 			}
 		}
 		LOG_DBG("FSM: action %d, rec_state %d", action, rec_state);
 		switch (action) {
-		case ACTION_CAM_ON:
+		case EVENT_CAM_DISCOVERED:
+			LOG_INF("======= GoPro discovered (GOPRO_REC_DISCOVERED)");
+			switch (rec_state) {
+				case REC_UNKNOWN:
+					LOG_DBG("CAM_DISCOVERED in REC_UNKNOWN: start status query");
+					status_query_sent = true;
+					ble_gopro_query_status();
+					k_timer_start(&status_timer, K_SECONDS(1), K_SECONDS(1));
+					break;
+				default:
+					LOG_WRN("CAM_DISCOVERED while in state %d: ignore", rec_state);
+					break;
+			}	
+			break;
+		case EVENT_CAM_ON:
 			switch (rec_state) {
 				case REC_OFF_SENT:
 					k_timer_stop(&status_timer);
@@ -311,7 +342,7 @@ int main(void)
 			}
 			break;
 
-		case ACTION_CAM_OFF:
+		case EVENT_CAM_OFF:
 			switch (rec_state) {
 			case REC_ON_SENT:
 					k_timer_stop(&status_timer);
@@ -329,7 +360,7 @@ int main(void)
 					break;
 			}
 			break;
-		case ACTION_STATUS_TICK:
+		case EVENT_STATUS_TICK:
 			if (rec_state == REC_OFF) {
 				LOG_ERR("STATUS_TICK while REC_OFF: shouldn't have polled, stopping timer");	
 				k_timer_stop(&status_timer);
@@ -343,7 +374,7 @@ int main(void)
 				LOG_ERR("STATUS_TICK while status_query_sent: ignore?");
 			}
 			break;
-		case ACTION_STATUS_RES_CAM_ON:
+		case EVENT_STATUS_RES_CAM_ON:
 			if (!status_query_sent) {
 				LOG_ERR("STATUS_RES_CAM_ON while !status_query_sent: ignore ressponse");
 				//k_timer_stop(&status_timer);
@@ -366,7 +397,7 @@ int main(void)
 					break;
 			}
 	
-		case ACTION_STATUS_RES_CAM_OFF:
+		case EVENT_STATUS_RES_CAM_OFF:
 			if (!status_query_sent) {
 				LOG_ERR("STATUS_RES_CAM_OFF while !status_query_sent: ignore ressponse");
 				//k_timer_stop(&status_timer);
@@ -392,18 +423,18 @@ int main(void)
 			}
 			break;
 		default:
-			LOG_ERR("Unknown action %d", msg.action);
+			LOG_ERR("Unknown event %d", msg.action);
 			break;
 		}
 		
 		/*
 		 * TODO once the 3 Garmin buttons (page right/left, lap) are
 		 * wired to GPIOs (see boards/nrf52840dongle_nrf52840.overlay)
-		 * and added to `enum remote_action` above:
+		 * and added to `enum rmt_event` above:
 		 *
-		 * case ACTION_PAGE_R:
-		 * case ACTION_PAGE_L:
-		 * case ACTION_LAP:
+		 * case EVENT_PAGE_R:
+		 * case EVENT_PAGE_L:
+		 * case EVENT_LAP:
 		 *	ant_garmin_note_activity();
 		 *	ant_garmin_handle_button(...);
 		 *	break;

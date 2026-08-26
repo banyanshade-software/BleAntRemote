@@ -203,6 +203,11 @@ static void start_subscribe(struct bt_conn *conn)
 	} else {
 		LOG_INF("Subscribed to GP-0073 notifications - GoPro ready");
 		gopro_ready = true;
+		if (status_cb) {
+			status_cb(GOPRO_REC_DISCOVERED);
+		} else {
+			LOG_WRN("No status callback registered, can't report GOPRO_REC_DISCOVERED");
+		}
 	}
 
 	if (query_rsp_handle == 0) {
