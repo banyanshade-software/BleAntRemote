@@ -315,9 +315,13 @@ int main(void)
 			LOG_INF("======= GoPro discovered (GOPRO_REC_DISCOVERED)");
 			switch (rec_state) {
 				case REC_UNKNOWN:
-					LOG_DBG("CAM_DISCOVERED in REC_UNKNOWN: start status ble_gopro_query_status()");
-					status_query_sent = true;
-					ble_gopro_query_status();
+					if ((0)) {
+						LOG_DBG("CAM_DISCOVERED in REC_UNKNOWN: start status ble_gopro_query_status()");
+						status_query_sent = true;
+						ble_gopro_query_status();
+					} else {
+						LOG_DBG("CAM_DISCOVERED in REC_UNKNOWN");
+					}
 					k_timer_start(&status_timer, K_SECONDS(1), K_SECONDS(1));
 					break;
 				default:
