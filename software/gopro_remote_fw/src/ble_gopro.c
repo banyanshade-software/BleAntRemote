@@ -10,7 +10,7 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
 
-LOG_MODULE_REGISTER(ble_gopro, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(ble_gopro, LOG_LEVEL_DBG);
 
 /* -------------------------------------------------------------------
  * Open GoPro UUIDs (confirmed via the official docs + reference
@@ -73,7 +73,7 @@ static struct bt_gatt_discover_params discover_params;
 static struct bt_gatt_subscribe_params subscribe_params;
 static struct bt_gatt_subscribe_params query_subscribe_params;
 
-static ble_gopro_status_cb_t status_cb;
+static ble_gopro_status_cb_t status_cb = NULL; /* registered by main.c */
 
 static void start_scan(void);
 
@@ -88,7 +88,7 @@ void ble_gopro_query_status(void)
 		LOG_WRN("GoPro not connected / not ready, status query skipped");
 		return;
 	}
-
+	LOG_INF("ble_gopro_query_status() call");
 	int err = bt_gatt_write_without_response(gopro_conn, query_handle,
 						  GET_STATUS, sizeof(GET_STATUS),
 						  false);
@@ -204,6 +204,7 @@ static void start_subscribe(struct bt_conn *conn)
 		LOG_INF("Subscribed to GP-0073 notifications - GoPro ready");
 		gopro_ready = true;
 		if (status_cb) {
+			LOG_INF("GoPro ready, reporting GOPRO_REC_DISCOVERED");
 			status_cb(GOPRO_REC_DISCOVERED);
 		} else {
 			LOG_WRN("No status callback registered, can't report GOPRO_REC_DISCOVERED");

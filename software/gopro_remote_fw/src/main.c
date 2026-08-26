@@ -203,10 +203,11 @@ static void status_timer_handler(struct k_timer *timer)
 
 K_TIMER_DEFINE(status_timer, status_timer_handler, NULL);
 
-static void on_gopro_status(enum gopro_rec_state state)
+static void on_gopro_status(enum gopro_rec_state status)
 {
+	LOG_DBG("on_gopro_status: status=%d", status);
 	struct remote_msg msg = { 0 };
-	switch (state) {
+	switch (status) {
 		case GOPRO_REC_STARTED:
 			msg.action = EVENT_STATUS_RES_CAM_ON;
 			break;
@@ -216,11 +217,13 @@ static void on_gopro_status(enum gopro_rec_state state)
 		case GOPRO_REC_DISCOVERED:
 			msg.action = EVENT_CAM_DISCOVERED;
 			break;
+		case GOPRO_REC_UNKNOWN:
+			LOG_DBG("on_gopro_status: GOPRO_REC_UNKNOWN - ignoring");
+			return;
 		default:
-			LOG_ERR("on_gopro_status: unknown state %d", state);
+			LOG_ERR("on_gopro_status: unknown status %d", status);
 			return;
 	}
-	msg.action = (state == GOPRO_REC_STARTED) ? EVENT_STATUS_RES_CAM_ON : EVENT_STATUS_RES_CAM_OFF; ;
 	k_msgq_put(&action_msgq, &msg, K_NO_WAIT);
 }
 
@@ -306,13 +309,13 @@ int main(void)
 					break;
 			}
 		}
-		LOG_DBG("FSM: action %d, rec_state %d", action, rec_state);
+		LOG_DBG("FSM: event %d, rec_state %d", action, rec_state);
 		switch (action) {
 		case EVENT_CAM_DISCOVERED:
 			LOG_INF("======= GoPro discovered (GOPRO_REC_DISCOVERED)");
 			switch (rec_state) {
 				case REC_UNKNOWN:
-					LOG_DBG("CAM_DISCOVERED in REC_UNKNOWN: start status query");
+					LOG_DBG("CAM_DISCOVERED in REC_UNKNOWN: start status ble_gopro_query_status()");
 					status_query_sent = true;
 					ble_gopro_query_status();
 					k_timer_start(&status_timer, K_SECONDS(1), K_SECONDS(1));
@@ -366,12 +369,17 @@ int main(void)
 				k_timer_stop(&status_timer);
 				break;
 			}
+				
 			if (!status_query_sent) {
-				LOG_DBG("STATUS_TICK: sending status query");
+				LOG_DBG("STATUS_TICK: sending status ble_gopro_query_status()");
 				ble_gopro_query_status();
 				status_query_sent = true;
+			} else if (rec_state == REC_UNKNOWN	) {
+				LOG_DBG("STATUS_TICK while REC_UNKNOWN ignoring status_query_sent=%d", status_query_sent);
+				status_query_sent = true;
+				ble_gopro_query_status();
 			} else {
-				LOG_ERR("STATUS_TICK while status_query_sent: ignore?");
+				LOG_DBG("STATUS_TICK while status_query_sent: ignore");
 			}
 			break;
 		case EVENT_STATUS_RES_CAM_ON:
