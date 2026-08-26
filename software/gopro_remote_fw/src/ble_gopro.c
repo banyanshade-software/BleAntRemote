@@ -20,6 +20,9 @@ LOG_MODULE_REGISTER(ble_gopro, LOG_LEVEL_INF);
  *     characteristics (XXXX = the number)          9046-0002a5d5c51b
  *   - GP-0072 = Command (write)
  *   - GP-0073 = Command Response (notify)
+ *   - GP-0074 = Query (write) - "Get Camera Status", "Register for
+ *     status updates", etc.
+ *   - GP-0075 = Query Response (notify)
  * ------------------------------------------------------------------- */
 
 #define BT_UUID_GOPRO_SERVICE_VAL   0xfea6
@@ -28,13 +31,31 @@ LOG_MODULE_REGISTER(ble_gopro, LOG_LEVEL_INF);
 	BT_UUID_128_ENCODE(0xb5f90072, 0xaa8d, 0x11e3, 0x9046, 0x0002a5d5c51b)
 #define BT_UUID_GOPRO_CMD_RSP_VAL \
 	BT_UUID_128_ENCODE(0xb5f90073, 0xaa8d, 0x11e3, 0x9046, 0x0002a5d5c51b)
+#define BT_UUID_GOPRO_QUERY_VAL \
+	BT_UUID_128_ENCODE(0xb5f90074, 0xaa8d, 0x11e3, 0x9046, 0x0002a5d5c51b)
+#define BT_UUID_GOPRO_QUERY_RSP_VAL \
+	BT_UUID_128_ENCODE(0xb5f90075, 0xaa8d, 0x11e3, 0x9046, 0x0002a5d5c51b)
 
 static struct bt_uuid_128 uuid_gopro_cmd = BT_UUID_INIT_128(BT_UUID_GOPRO_CMD_VAL);
 static struct bt_uuid_128 uuid_gopro_cmd_rsp = BT_UUID_INIT_128(BT_UUID_GOPRO_CMD_RSP_VAL);
+static struct bt_uuid_128 uuid_gopro_query = BT_UUID_INIT_128(BT_UUID_GOPRO_QUERY_VAL);
+static struct bt_uuid_128 uuid_gopro_query_rsp = BT_UUID_INIT_128(BT_UUID_GOPRO_QUERY_RSP_VAL);
 
 /* "Set Shutter" TLV command : [Length][Command ID 0x01][param] */
 static const uint8_t SHUTTER_ON[]  = { 0x03, 0x01, 0x01, 0x01 };
 static const uint8_t SHUTTER_OFF[] = { 0x03, 0x01, 0x01, 0x00 };
+
+/*
+ * "Get Camera Status Values" query : [Length][Command ID 0x13], no
+ * status IDs listed = return ALL current statuses. Command ID and the
+ * response framing below are per the Open GoPro BLE spec, but - like
+ * the rest of this file - NOT verified against a real camera; the
+ * status ID used to detect "is recording" (0x0A, ENCODING) is the one
+ * commonly referenced in Open GoPro sample code. Double check both
+ * against the spec for your camera's firmware before relying on it.
+ */
+static const uint8_t GET_STATUS[] = { 0x01, 0x13 };
+#define GOPRO_STATUS_ID_ENCODING 0x0A
 
 /* -------------------------------------------------------------------
  * Connection / GATT discovery state
@@ -43,12 +64,38 @@ static struct bt_conn *gopro_conn;
 static uint16_t cmd_handle;       /* GP-0072 characteristic handle */
 static uint16_t cmd_rsp_handle;   /* GP-0073 characteristic handle */
 static uint16_t cmd_rsp_ccc_handle;
+static uint16_t query_handle;     /* GP-0074 characteristic handle */
+static uint16_t query_rsp_handle; /* GP-0075 characteristic handle */
+static uint16_t query_rsp_ccc_handle;
 static bool gopro_ready;          /* true once ready to receive commands */
 
 static struct bt_gatt_discover_params discover_params;
 static struct bt_gatt_subscribe_params subscribe_params;
+static struct bt_gatt_subscribe_params query_subscribe_params;
+
+static ble_gopro_status_cb_t status_cb;
 
 static void start_scan(void);
+
+void ble_gopro_set_status_cb(ble_gopro_status_cb_t cb)
+{
+	status_cb = cb;
+}
+
+void ble_gopro_query_status(void)
+{
+	if (!gopro_ready || gopro_conn == NULL || query_handle == 0) {
+		LOG_WRN("GoPro not connected / not ready, status query skipped");
+		return;
+	}
+
+	int err = bt_gatt_write_without_response(gopro_conn, query_handle,
+						  GET_STATUS, sizeof(GET_STATUS),
+						  false);
+	if (err) {
+		LOG_ERR("Failed to write status query (%d)", err);
+	}
+}
 
 /* -------------------------------------------------------------------
  * Public API
@@ -86,6 +133,63 @@ static uint8_t on_cmd_rsp_notify(struct bt_conn *conn,
 	return BT_GATT_ITER_CONTINUE;
 }
 
+/* -------------------------------------------------------------------
+ * GATT callback : query response notification (GP-0075), i.e. the
+ * reply to ble_gopro_query_status(). Expected framing (single-packet,
+ * NOT verified against real hardware - see the comment near
+ * GET_STATUS above):
+ *   [0]     length of what follows (top bit clear - fragmented/
+ *           extended-length responses are not handled here)
+ *   [1]     Command ID echoed back (0x13)
+ *   [2]     result/status byte (0x00 = success)
+ *   [3..]   repeated TLV entries: [status ID][value length][value...]
+ * We only care about the ENCODING status ID (is the camera currently
+ * recording); everything else is skipped over.
+ * ------------------------------------------------------------------- */
+static uint8_t on_query_rsp_notify(struct bt_conn *conn,
+				    struct bt_gatt_subscribe_params *params,
+				    const void *data, uint16_t length)
+{
+	if (!data) {
+		LOG_INF("Unsubscribed from GP-0075");
+		return BT_GATT_ITER_STOP;
+	}
+	LOG_HEXDUMP_DBG(data, length, "GoPro status response (GP-0075):");
+
+	const uint8_t *buf = data;
+
+	if (length < 3 || (buf[0] & 0x80)) {
+		LOG_WRN("Status response too short or uses extended/"
+			"continuation framing (unsupported), ignoring");
+		return BT_GATT_ITER_CONTINUE;
+	}
+	if (buf[1] != 0x13 || buf[2] != 0x00) {
+		LOG_WRN("Status query failed or unexpected response "
+			"(cmd=0x%02x status=0x%02x)", buf[1], buf[2]);
+		return BT_GATT_ITER_CONTINUE;
+	}
+
+	size_t i = 3;
+	while (i + 1 < length) {
+		uint8_t status_id = buf[i];
+		uint8_t val_len = buf[i + 1];
+
+		if (i + 2 + val_len > length) {
+			LOG_WRN("Malformed status TLV, stopping parse");
+			break;
+		}
+		if (status_id == GOPRO_STATUS_ID_ENCODING && val_len == 1 && status_cb) {
+			bool recording = buf[i + 2] != 0;
+
+			LOG_INF("GoPro status: recording=%d", recording);
+			status_cb(recording ? GOPRO_REC_STARTED : GOPRO_REC_STOPPED);
+		}
+		i += 2 + val_len;
+	}
+
+	return BT_GATT_ITER_CONTINUE;
+}
+
 static void start_subscribe(struct bt_conn *conn)
 {
 	subscribe_params.notify = on_cmd_rsp_notify;
@@ -99,6 +203,23 @@ static void start_subscribe(struct bt_conn *conn)
 	} else {
 		LOG_INF("Subscribed to GP-0073 notifications - GoPro ready");
 		gopro_ready = true;
+	}
+
+	if (query_rsp_handle == 0) {
+		LOG_WRN("GP-0074/0075 (Query) not found, camera status polling unavailable");
+		return;
+	}
+
+	query_subscribe_params.notify = on_query_rsp_notify;
+	query_subscribe_params.value = BT_GATT_CCC_NOTIFY;
+	query_subscribe_params.value_handle = query_rsp_handle;
+	query_subscribe_params.ccc_handle = query_rsp_ccc_handle;
+
+	err = bt_gatt_subscribe(conn, &query_subscribe_params);
+	if (err && err != -EALREADY) {
+		LOG_ERR("Failed to subscribe to GP-0075 notifications (%d)", err);
+	} else {
+		LOG_INF("Subscribed to GP-0075 notifications");
 	}
 }
 
@@ -135,6 +256,14 @@ static uint8_t discover_func(struct bt_conn *conn,
 			cmd_rsp_ccc_handle = chrc->value_handle + 1;
 			LOG_INF("GP-0073 (Command Response) found, handle=%u",
 				cmd_rsp_handle);
+		} else if (bt_uuid_cmp(chrc->uuid, &uuid_gopro_query.uuid) == 0) {
+			query_handle = chrc->value_handle;
+			LOG_INF("GP-0074 (Query) found, handle=%u", query_handle);
+		} else if (bt_uuid_cmp(chrc->uuid, &uuid_gopro_query_rsp.uuid) == 0) {
+			query_rsp_handle = chrc->value_handle;
+			query_rsp_ccc_handle = chrc->value_handle + 1;
+			LOG_INF("GP-0075 (Query Response) found, handle=%u",
+				query_rsp_handle);
 		}
 	}
 
@@ -184,9 +313,17 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	gopro_ready = false;
 	cmd_handle = 0;
 	cmd_rsp_handle = 0;
+	query_handle = 0;
+	query_rsp_handle = 0;
 	if (gopro_conn) {
 		bt_conn_unref(gopro_conn);
 		gopro_conn = NULL;
+	}
+
+	/* Recording state is no longer known - let the FSM in main.c
+	 * decide what to do (it must not assume "still recording"). */
+	if (status_cb) {
+		status_cb(GOPRO_REC_UNKNOWN);
 	}
 
 	/* No GoPro connected anymore: resume scanning right away. */
