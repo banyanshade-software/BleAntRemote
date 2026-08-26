@@ -1,5 +1,16 @@
 # GoPro Remote Firmware — nRF52840 Dongle (BLE prototype)
 
+## Code layout
+The firmware is split into three modules, for maintainability: each radio
+protocol is isolated behind a small header, and the main file only knows
+about the button/action state machine.
+
+| File | Role |
+|------|------|
+| `src/main.c` | Main finite-state machine: button GPIO/interrupt setup, action queue, dispatch to the modules below. No BLE/ANT+ API usage. |
+| `src/ble_gopro.[ch]` | BLE central role driver for the GoPro (Open GoPro API): stack init, bonding, scan/connect, GATT discovery, shutter command. |
+| `src/ant_garmin.[ch]` | ANT+ driver for the Garmin Edge (Generic Controls profile). Currently a stub — see below. |
+
 ## What this firmware does today
 - Scans over BLE and automatically connects to the first GoPro it detects
   (filtering on service `0xFEA6`).
@@ -22,9 +33,9 @@ point, not a validated binary.
 ## What's still missing (intentionally, see prior discussion)
 1. **ANT+ (3 Garmin buttons)**: requires Nordic's proprietary ANT stack
    (SoftDevice S212/S332 or the nRF5 SDK ANT module), under a separate
-   license from Nordic/ANT+ Alliance. Not included here — a stub is
-   present (`handle_garmin_button()`), to be completed once the ANT
-   stack is obtained.
+   license from Nordic/ANT+ Alliance. Not included here — `ant_garmin.c`
+   is a stub (`ant_garmin_handle_button()`), to be completed once the
+   ANT stack is obtained.
 2. **Fine-grained power management (System OFF)**: the dongle is
    USB-powered during testing, so not critical right now. Needs to be
    revisited for the final CR2032 version (see the "wake on PORT event"
@@ -33,7 +44,8 @@ point, not a validated binary.
    dongle.
 4. **3 remaining Garmin buttons** (page right/left/lap): not yet in the
    overlay or in `main.c`, to be added following the same pattern as
-   `btn_cam_on`/`btn_cam_off` once ANT+ is in place.
+   `btn_cam_on`/`btn_cam_off` once ANT+ is in place, dispatching to
+   `ant_garmin_handle_button()`.
 
 ## ⚠️ Button pinout to verify before soldering
 In `boards/nrf52840dongle_nrf52840.overlay`, **P0.13 and P0.15** were used

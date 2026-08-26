@@ -54,6 +54,27 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
 
 ## 2. Technical specifications
 
+### Maintainability & modularity
+- The firmware must be **modular**: each radio protocol (BLE for the GoPro,
+  ANT+ for the Garmin Edge, and any future link such as the mobile-app BLE
+  configuration service) is implemented in its own source module behind a
+  small header, independent of the others.
+- The main application logic (button handling, wake/sleep, dispatch) is kept
+  separate from protocol-specific code, so it does not need to change when a
+  protocol module is modified, replaced, or extended.
+- Concretely, in `software/gopro_remote_fw/src/`:
+  - `main.c` — main finite-state machine (buttons, action queue, dispatch).
+  - `ble_gopro.[ch]` — BLE/GoPro module (Open GoPro API).
+  - `ant_garmin.[ch]` — ANT+/Garmin module (currently a stub, see firmware README).
+- Rationale: several protocols/features are still open or unimplemented
+  (ANT+, mobile-app BLE configuration — see "Remote configuration" above).
+  Keeping them isolated avoids one area's changes breaking another, keeps
+  each module independently testable, and makes it easier for a new
+  contributor to work on a single protocol without understanding the whole
+  firmware.
+- This requirement complements the "all documentation and code comments in
+  English" convention already applied across this project.
+
 ### Overall architecture
 - MCU **wakes only on button press** (System OFF between actions), no
   permanent radio connection.
@@ -105,9 +126,10 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
   mobile app requires the device to act as a BLE *peripheral* (the phone
   connects to it) and advertise a custom **Configuration Service** UUID.
   The nRF52832/Zephyr BLE stack supports multi-role operation, but the
-  current firmware (`software/gopro_remote_fw/src/main.c`) only implements
-  the central role — adding the peripheral/config role is a firmware task
-  still to be done, not yet started.
+  current firmware (`software/gopro_remote_fw/src/ble_gopro.c`) only
+  implements the central role — adding the peripheral/config role (likely
+  as its own module, e.g. `ble_config.[ch]`, per the modularity requirement
+  above) is a firmware task still to be done, not yet started.
 - **Session trigger**: how a configuration session is entered (dedicated
   button combo, magnet/reed switch, always-advertise-briefly-on-wake, etc.)
   is **not decided yet**.
