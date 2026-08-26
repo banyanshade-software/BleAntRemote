@@ -7,4 +7,5 @@ target_sources(app PRIVATE
 	src/main.c
 	src/ble_gopro.c
 	src/ant_garmin.c
+	src/temp_sensor.c
 )

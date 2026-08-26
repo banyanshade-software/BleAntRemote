@@ -5,7 +5,8 @@
 ### Objective
 Compact housing mounted on the handlebar, allowing remote control of:
 - the **GoPro Hero 11 Black Mini** camera (via BLE / Open GoPro API)
-- the **Garmin Edge Explore** cycling computer (via ANT+ / Generic Controls profile)
+- the **Garmin Edge Explore** cycling computer (via ANT+ / Generic Controls profile),
+  which also carries the ambient temperature broadcast (see "Thermometer" below)
 
 ### Controls (5 buttons)
 
@@ -19,9 +20,15 @@ Compact housing mounted on the handlebar, allowing remote control of:
 
 Each button triggers an independent, immediate action (no mode/menu to navigate).
 
-### Secondary function (optional, to be confirmed)
-- **Thermometer**: ambient temperature measurement via thermistor, usable later
-  (internal logging or display if a screen is added later).
+### Thermometer (ANT+ broadcast)
+- Ambient/chip temperature is measured using the **nRF52832's built-in die
+  temperature sensor** — no external thermistor. This replaces the earlier
+  "external NTC thermistor" plan.
+- The reading is **broadcast over ANT+** (the same radio/link already used
+  for the Garmin buttons) so it can be displayed directly on the Garmin
+  Edge, instead of only being logged internally.
+- Exact broadcast profile/timing: see "Garmin Edge communication (ANT+)"
+  below and "Open points".
 
 ### Remote configuration (mobile app)
 - The device must be **configurable from a companion mobile app** (iOS/Android),
@@ -113,12 +120,35 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
   not persist subscription state).
 
 ### Garmin Edge communication (ANT+)
-- ANT+ **Generic Controls** profile (the same one used by the official Garmin
-  *Edge Remote* accessory).
-- Commands sent as **Page 73 (Generic Command)** with the corresponding key
-  code (page right / page left / lap).
-- Edge Explore confirmed compatible with ANT+ and with the Edge Remote
-  accessory (same profile).
+ANT+ is used for two purposes, both from the same radio/module:
+
+1. **Remote control** — ANT+ **Generic Controls** profile (the same one used
+   by the official Garmin *Edge Remote* accessory).
+   - Commands sent as **Page 73 (Generic Command)** with the corresponding
+     key code (page right / page left / lap).
+   - Edge Explore confirmed compatible with ANT+ and with the Edge Remote
+     accessory (same profile).
+2. **Temperature broadcast** — the internal die temperature (see
+   "Thermometer" above) is sent so the Edge can show it as a data field.
+   - Expected profile: ANT+ **Environment Sensor** (temperature), the
+     common device type Garmin Edge units already recognize for ambient
+     temperature accessories — **to be confirmed** against the ANT+
+     specification once the ANT stack is available.
+   - **Session reuse, no extra wake-up**: the temperature reading is
+     intended to be sent opportunistically whenever a Garmin button
+     (page right/left, lap) already wakes the device and activates the
+     ANT+ radio — this fits the existing "wake only on button press, one
+     protocol at a time" architecture with no additional power cost.
+   - **Open question**: this only updates the Edge's temperature field when
+     a Garmin button is pressed, not continuously. Whether the product
+     needs periodic (timer-driven) updates while idle — and the resulting
+     battery-life trade-off against the "several months on CR2032" target
+     — is **not decided yet** (see "Open points").
+   - **Open question**: whether the Generic Controls channel and the
+     Environment Sensor broadcast need to run as two separate concurrent
+     ANT+ channels (channel count depends on the ANT stack/SoftDevice
+     chosen) or can be combined, is **to be confirmed** once the ANT+
+     stack is obtained.
 
 ### Mobile app configuration (BLE) — draft design
 - **Role**: while communicating with the GoPro the device acts as a BLE
@@ -152,11 +182,22 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
 - **Battery measurement**: software reading via the nRF52's internal SAADC
   VDD channel — no additional component required.
 
-### Thermistor (optional)
-- Standard NTC (e.g. 10kΩ @ 25°C) in a voltage-divider bridge with a fixed
-  resistor, read on an nRF52 ADC input.
-- Activated only occasionally (no continuous measurement) to preserve
-  battery life.
+### Internal temperature sensor
+- Uses the **nRF52832's built-in die temperature sensor** peripheral (a
+  dedicated TEMP peripheral, separate from the SAADC used for battery
+  measurement above) — no external thermistor, no extra ADC input, no
+  additional BOM component.
+- Read via Zephyr's standard sensor API (`SENSOR_CHAN_DIE_TEMP`); see
+  `software/gopro_remote_fw/src/temp_sensor.c`.
+- **Caveat**: this measures the chip's die temperature, not true free-air
+  ambient temperature — expect an offset from self-heating and the
+  enclosure, and the sensor's stock (uncalibrated) accuracy is roughly
+  ±4°C per Nordic's datasheet. Acceptable for an indicative "feels like"
+  reading on the Edge, not for precision measurement. To be validated once
+  real hardware is available.
+- Activated only occasionally (on the same wake-up as a Garmin button
+  press, see "Garmin Edge communication (ANT+)" above), not continuously,
+  to preserve battery life.
 
 ### PCB
 - Based on the **Ebyte E73-2G4M08S1E** module (18.0 x 13.0mm, 43-pin
@@ -184,11 +225,14 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
 | SW1–SW5 | Push buttons (tact switch) | 5 | Camera ON, Camera OFF, Page right, Page left, Lap | GPIO pull-up, active-low |
 | C1 | **Tantalum/polymer 47–100µF** capacitor, 0805/1206 package | 1 | Voltage-drop buffer (radio current spikes) | Low ESR required |
 | C2 | **100nF** ceramic capacitor, 0402 package | 1 | HF filtering | — |
-| NTC1 | **10kΩ** NTC thermistor | 1 (optional) | Temperature measurement | Voltage-divider bridge with fixed resistor |
-| R1 | **10kΩ** fixed resistor | 1 (optional) | Thermistor divider bridge | Value to be adjusted to the target measurement range |
 | J1 | **SWD** header/pads (SWDIO, SWCLK, GND, VDD) | 1 | Programming/debug | Not populated in production, useful for prototyping |
 | PCB | Custom board (extended-pad E73 footprint) | 1 | Carrier | KiCad, template already drafted in the project |
 | — | Enclosure (3D printed or other) | 1 | Protection/handlebar mount | To be defined (sealing to be planned) |
+
+> Note: no thermistor (NTC) or divider resistor is needed — ambient
+> temperature is read from the nRF52832's internal die temperature sensor
+> (see "Internal temperature sensor" above). The earlier NTC1/R1 BOM lines
+> from previous revisions of this document have been removed.
 
 ### Tooling (not mounted on the final board)
 | Tool | Role |
@@ -212,5 +256,16 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
   buttons are more practical than a single toggle button (intentional
   redundancy to avoid mistakes while riding).
 - **Screen**: deferred, but the architecture (SAADC battery reading,
-  thermistor) remains compatible with a future addition (HT1621 segment
-  LCD already studied).
+  internal temperature sensor) remains compatible with a future addition
+  (HT1621 segment LCD already studied).
+- **ANT+ temperature broadcast profile**: confirm the exact ANT+ Environment
+  Sensor page/device-type used, and whether it needs its own ANT+ channel
+  alongside the Generic Controls channel (concurrent channel count depends
+  on the ANT stack/SoftDevice chosen — not obtained yet).
+- **ANT+ temperature broadcast timing**: opportunistic (piggybacked on
+  Garmin button presses, no extra wake-up) vs. periodic/timer-driven
+  (continuously updated Edge temperature field, but adds wake-ups outside
+  of button presses and impacts the CR2032 battery-life target) — not
+  decided yet.
+- **Internal sensor accuracy**: die temperature vs. true ambient
+  temperature offset/calibration to be validated on real hardware.

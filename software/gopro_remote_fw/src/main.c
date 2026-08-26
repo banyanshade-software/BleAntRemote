@@ -6,11 +6,12 @@
  * press, decides which action to run, and dispatches it to the
  * protocol-specific modules. It does not know about BLE or ANT+
  * internals - that logic lives in ble_gopro.[ch] (GoPro over BLE) and
- * ant_garmin.[ch] (Garmin Edge over ANT+, stub for now). This split
- * keeps each radio protocol independently maintainable and testable,
- * and makes it straightforward to add a new module later (e.g. a BLE
- * peripheral "configuration service" for a companion mobile app)
- * without touching the other two.
+ * ant_garmin.[ch] (Garmin Edge over ANT+, stub for now), with
+ * temp_sensor.[ch] providing the internal temperature reading that
+ * ant_garmin broadcasts. This split keeps each radio protocol/sensor
+ * independently maintainable and testable, and makes it straightforward
+ * to add a new module later (e.g. a BLE peripheral "configuration
+ * service" for a companion mobile app) without touching the others.
  *
  * What this firmware does (functional) :
  *   - Scans for and connects to a GoPro (filtering on the BLE service
@@ -24,16 +25,20 @@
  *     On "Camera OFF" button press -> writes the shutter=0 command.
  *
  * What this firmware does NOT do (to be added later) :
- *   - ANT+ (Garmin page right/left/lap buttons) : requires Nordic's
- *     proprietary ANT stack (SoftDevice S212/S332 or the nRF5 SDK ANT
- *     module), under a separate license from Nordic/ANT+ Alliance.
- *     Not included here. The Garmin buttons are wired to stubs (see
- *     ant_garmin.c) in the meantime.
+ *   - ANT+ (Garmin page right/left/lap buttons, and the temperature
+ *     broadcast) : requires Nordic's proprietary ANT stack (SoftDevice
+ *     S212/S332 or the nRF5 SDK ANT module), under a separate license
+ *     from Nordic/ANT+ Alliance. Not included here. The Garmin buttons
+ *     and the temperature broadcast are wired to stubs (see
+ *     ant_garmin.c) in the meantime. The 3 Garmin buttons themselves
+ *     are not wired to GPIOs/actions yet either (see README).
  *   - Fine-grained power management (System OFF between connections) :
  *     the dongle is USB-powered, so not critical for testing, but
  *     needs to be revisited for the final CR2032 version.
- *   - Thermistor / battery voltage reading (ADC) : not wired on the
- *     bare dongle, to be added with the real enclosure.
+ *   - Battery voltage reading (ADC) : not wired on the bare dongle, to
+ *     be added with the real enclosure. (Ambient temperature no longer
+ *     needs a thermistor/ADC - see temp_sensor.c, which reads the
+ *     nRF52's internal die temperature sensor instead.)
  *
  * Button GPIO pinout : see boards/nrf52840dongle_nrf52840.overlay
  */
@@ -46,6 +51,7 @@
 
 #include "ble_gopro.h"
 #include "ant_garmin.h"
+#include "temp_sensor.h"
 
 LOG_MODULE_REGISTER(gopro_remote, LOG_LEVEL_INF);
 
@@ -158,6 +164,11 @@ int main(void)
 
 	ant_garmin_init();
 
+	err = temp_sensor_init();
+	if (err) {
+		LOG_WRN("Internal temperature sensor unavailable (%d)", err);
+	}
+
 	/* Main loop: wait for a button action and dispatch it to the
 	 * relevant protocol module. Each module manages its own
 	 * connection/reconnection state internally. */
@@ -174,6 +185,26 @@ int main(void)
 			LOG_INF("Camera OFF button pressed");
 			ble_gopro_send_shutter(false);
 			break;
+		/*
+		 * TODO once the 3 Garmin buttons (page right/left, lap) are
+		 * wired to GPIOs (see boards/nrf52840dongle_nrf52840.overlay)
+		 * and added to `enum remote_action` above:
+		 *
+		 * case ACTION_PAGE_R:
+		 * case ACTION_PAGE_L:
+		 * case ACTION_LAP:
+		 *	ant_garmin_handle_button(...);
+		 *	// Piggyback the temperature broadcast on the same
+		 *	// already-active ANT+ session - no extra wake-up.
+		 *	// See doc/gopro_garmin_remote_specs.md, "Garmin Edge
+		 *	// communication (ANT+)" for the open question of
+		 *	// periodic (timer-driven) updates while idle.
+		 *	int16_t temp_centi;
+		 *	if (temp_sensor_read(&temp_centi)) {
+		 *		ant_garmin_send_temperature(temp_centi);
+		 *	}
+		 *	break;
+		 */
 		}
 	}
 
