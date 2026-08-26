@@ -25,23 +25,24 @@
  * implies (the MCU can no longer use full System OFF sleep for the
  * duration of an active session).
  *
- * NOT IMPLEMENTED YET (ANT+ transmission itself), and currently BLOCKED
- * on a toolchain/chip decision, not just a licensing step: the nRF52832
- * used in this project is not supported by Nordic's Zephyr-based ANT+
- * add-on (only nRF52840/nRF5340 are, as of the research behind this
- * comment) - ANT+ on this chip needs the older, separate nRF5 SDK
- * (S212/S332 SoftDevice), a different toolchain from the Zephyr one this
- * file and the rest of this firmware are built on. See
- * doc/gopro_garmin_remote_specs.md, "ANT+ implementation notes" for the
- * full finding, sources, licensing process, and the options being
- * weighed (port to nRF5 SDK / change chip / reconsider ANT+). Do not add
- * real `sd_ant_*`/`ant_*` calls here until that's decided - the two
- * toolchains use differently-named, non-interchangeable APIs.
+ * NOT IMPLEMENTED YET (ANT+ transmission itself). The chip is not the
+ * blocker: Nordic's Zephyr-based ANT+ add-on (`sdk-ant`) supports both
+ * the nRF52832 used here and the nRF52840, via its current "Add-on"
+ * deployment model (nRF Connect SDK v2.9.2+) - no toolchain/chip change
+ * needed, see doc/gopro_garmin_remote_specs.md, "ANT+ implementation
+ * notes" for the full sourcing (this corrects an earlier, incomplete
+ * assessment recorded and then reverted in this project's git history).
+ * What IS still needed before real `ant_*` calls can be added here:
+ * ANT+ Adopter signup + GitHub org access to the gated `sdk-ant` repo,
+ * confirming the west-workspace integration steps, and upgrading this
+ * project's nRF Connect SDK to v2.9.2+. See the implementation notes for
+ * the Kconfig symbols and API surface (`ant_*`, no `sd_` prefix) once
+ * that's done.
  *
  * The session timers below already run and call into temp_sensor.h; only
  * the actual radio transmission is a stub (it just logs a warning), so
  * the main FSM (main.c) and the timing behavior can be exercised
- * independently of that decision.
+ * independently of that work.
  */
 #ifndef ANT_GARMIN_H_
 #define ANT_GARMIN_H_

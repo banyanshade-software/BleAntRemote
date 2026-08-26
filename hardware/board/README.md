@@ -11,6 +11,15 @@
   the extended-pad template (hand soldering) seen previously, referenced by U1.
 - **PCB**: not generated yet (see "Next steps").
 
+## ⚠️ Out of sync: thermistor removed from the design
+`NTC1`, `R1`, and the `NTC_SENSE` net below are from an earlier design
+that used an external NTC thermistor for temperature. That was replaced
+by the nRF52832's internal die temperature sensor (no external component)
+— see `doc/gopro_garmin_remote_specs.md`, "Internal temperature sensor".
+This schematic has **not been updated yet** to remove them — treat the
+table below as describing the *previous* design for that part, and remove
+`NTC1`/`R1`/`NTC_SENSE` during the next schematic edit.
+
 ## Schematic components
 
 | Ref. | Description | Connected nets |
@@ -42,12 +51,14 @@
 
 ## Suggested next steps
 
-1. Open `gopro_garmin_remote.kicad_pro` in KiCad 7+, review the schematic on
+1. Remove `NTC1`, `R1`, and the `NTC_SENSE` net (superseded by the
+   internal temperature sensor — see above).
+2. Open `gopro_garmin_remote.kicad_pro` in KiCad 7+, review the schematic on
    screen, rearrange if needed.
-2. Complete the real E73 pinout (symbol + footprint).
-3. Switch to PCB mode (`Tools > Update PCB from Schematic`), place the
+3. Complete the real E73 pinout (symbol + footprint).
+4. Switch to PCB mode (`Tools > Update PCB from Schematic`), place the
    components, route the traces.
-4. Add the enclosure outline / mounting holes based on the chosen handlebar
+5. Add the enclosure outline / mounting holes based on the chosen handlebar
    mount.
 
 ## Tools used to generate this project

@@ -129,18 +129,23 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
 
 ### MCU / radio
 - **Nordic nRF52832** (Ebyte E73-2G4M08S1E module) — Cortex-M4F, 512KB flash / 64KB RAM.
-- Chosen because the *silicon* natively supports both **BLE and ANT+** on
+  Remains the **primary target**: existing KiCad schematic/BOM, no
+  hardware rework needed.
+- Chosen because the silicon natively supports both **BLE and ANT+** on
   the same radio, and because it is the only chip successfully tested in
   practice for BLE pairing with a GoPro (unlike the ESP32).
 - Software stack: **nRF Connect SDK (Zephyr)**, low-level C development,
-  for the BLE side (already implemented, see `ble_gopro.c`). **This does
-  not currently extend to ANT+ on this specific chip** — see "ANT+
-  implementation notes" at the end of this document: Nordic's Zephyr-based
-  ANT+ add-on only supports the nRF52840/nRF5340 today, not the nRF52832
-  used here. ANT+ on the nRF52832 requires the older, separate **nRF5
-  SDK** (non-Zephyr) instead. This is an open toolchain/architecture
-  decision, not yet resolved — see the implementation notes for the
-  options being considered.
+  for both BLE (already implemented, see `ble_gopro.c`) and ANT+.
+  Nordic's Zephyr-based ANT+ add-on (`sdk-ant`) supports the nRF52832
+  directly via its current "Add-on" deployment model (nRF Connect SDK
+  v2.9.2+) — an earlier check of this project only found older
+  compatibility data (nRF52840/nRF5340 only) and briefly recorded a
+  decision to switch chips as a result; that's been reverted now that the
+  fuller picture is confirmed. See "ANT+ implementation notes" at the end
+  of this document for the sourcing, the access/build-integration process
+  (still to be done), and the plan to also support the **nRF52840** as a
+  secondary target (e.g. the nRF52840 Dongle already used for BLE
+  bring-up) from the same firmware source tree.
 
 ### Buttons & wake-up
 - 5 touch buttons, individual GPIOs (no matrix), internal pull-up, active-low logic.
@@ -319,7 +324,9 @@ is officially named **Environment**, not "Environment Sensor."
   possible with an **ST-Link V2** driven via OpenOCD (not ST-Link V3, which
   is restricted to ST chips).
 - Recommended prototyping board before the final PCB: **nRF52-DK**
-  (integrated debugger, ready-to-use Zephyr examples).
+  (integrated debugger, ready-to-use Zephyr examples). The already-used
+  **nRF52840 Dongle (PCA10059)** doubles as a way to exercise the
+  secondary nRF52840 target (see "MCU / radio").
 
 ---
 
@@ -351,14 +358,20 @@ is officially named **Environment**, not "Environment Sensor."
 
 ## 4. Open points / to be decided
 
-- **ANT+ toolchain/chip decision (blocking, see "ANT+ implementation
-  notes" at the end of this document)**: the nRF52832 used in this
-  project is not currently supported by Nordic's Zephyr-based ANT+
-  add-on (only nRF52840/nRF5340 are) — real ANT+ code cannot be written
-  against the existing Zephyr firmware as-is. Needs a decision between
-  porting to the classic nRF5 SDK on the current chip, moving to a
-  supported chip (nRF52840/nRF5340, a hardware change), or reconsidering
-  ANT+ entirely, before any further ANT+ implementation work.
+- **ANT+ build integration (see "ANT+ implementation notes" at the end of
+  this document)**: the chip question is resolved (nRF52832 works, no
+  hardware change needed; nRF52840 kept as a secondary supported target).
+  Still open: getting ANT+ Adopter access to the gated `sdk-ant` repo, the
+  concrete west-workspace integration steps (only a "fresh workspace"
+  flow is documented, not composition with an existing manifest like this
+  project's), and confirming the project's nRF Connect SDK is upgraded to
+  v2.9.2+ (needed for nRF52832 support under the "Add-on" deployment
+  model).
+- **Zephyr board definition for the custom PCB**: none exists yet, for
+  either chip — only the reference `nrf52840dongle_nrf52840` board
+  (Nordic's prototyping dongle) has a devicetree overlay today. Needed
+  before the "support both chips" firmware goal can actually be built for
+  the real hardware.
 - **Mobile app configuration transport**: confirm BLE (vs. "classic
   Bluetooth", listed only as a placeholder — see "Remote configuration"
   above) and define the Configuration Service (session trigger, exposed
@@ -519,72 +532,119 @@ devicetree, so you don't wire it up yourself.
 ## 6. ANT+ implementation notes
 
 Before writing real ANT+ radio code, background research (web search
-against Nordic/ANT+ Alliance public sources, sourced below) surfaced a
-**toolchain/chip gap that blocks the straightforward path** of just adding
-ANT+ calls to the existing Zephyr firmware. This section documents that
-finding, the licensing process, and the API surface — captured now so the
-next step (picking a path forward) is an informed decision rather than a
-guess baked into code.
+against Nordic/ANT+ Alliance public sources, sourced below) checked
+whether the existing Zephyr firmware can simply add ANT+ calls, or whether
+a toolchain/chip change is needed. **Short answer: no chip change is
+needed.** This section documents the finding, the licensing process, the
+access/integration process, and the API surface.
 
-### The core finding: nRF52832 isn't (yet) supported by Zephyr's ANT+ add-on
+### Decision: support both nRF52832 and nRF52840
 Nordic ships ANT+ support for the Zephyr-based nRF Connect SDK — the
-toolchain this project's BLE code already uses — as a **separate add-on
-repository**, "ANT for nRF Connect SDK" (`ant-nrfconnect/sdk-ant` on
-GitHub; docs at ant-nrfconnect.github.io). Support was rolled out per-chip:
-the nRF5340 first, then nRF52840 (released alongside nRF Connect SDK
-v2.6, ~March 2024). **The nRF52832 used in this project (Ebyte
-E73-2G4M08S1E) is not on the supported list.** A Nordic engineer confirmed
-on DevZone that ANT/ANT+ was "not yet available on the nRF52-series" in
-NCS (only nRF53 at the time), and a January 2025 DevZone thread titled
-*"Add ANT support to nRF52832 with nRF Connect SDK v2.9.0"* indicates it
-still wasn't as of that SDK version, consistent with the official v1.3.0
-release notes stating the add-on is "production ready for nRF5340 and
-nRF52840" only.
-[Getting Started](https://www.thisisant.com/APIassets/1.1.0_ANTnRFConnectDoc/doc/getting_started.html) ·
-[DevZone #107934](https://devzone.nordicsemi.com/f/nordic-q-a/107934/add-ant-central-function-to-nrf52840-with-nrf-connect-sdk) ·
-[DevZone #118127](https://devzone.nordicsemi.com/f/nordic-q-a/118127/add-ant-support-to-nrf52832-with-nrf-connect-sdk-v2-9-0) ·
-[v1.3.0 release notes](https://www.thisisant.com/APIassets/ANTnRFConnectDoc/doc/releases/release-notes-1.3.0.html)
+toolchain this project's BLE code already uses — as a separate add-on
+repository, "ANT for nRF Connect SDK" (`ant-nrfconnect/sdk-ant` on GitHub;
+docs at ant-nrfconnect.github.io). It has shipped via two different
+deployment models over time:
+
+| sdk-nrf version | Deployment model | sdk-ant version | Supported nRF52 chips |
+|---|---|---|---|
+| v2.6 – v2.7 | "Manifest" | v1.2.0 – v1.3.0 | nRF52840 only |
+| v2.9.2+ | "Add-on" | v2.0.0+ | **nRF52832 and nRF52840** |
+
+**The nRF52832 already used in this project (Ebyte E73-2G4M08S1E, existing
+KiCad design) is supported**, provided the project's nRF Connect SDK is on
+v2.9.2 or later (the "Add-on" deployment model). An initial research pass
+only found the older "Manifest"-model compatibility data (nRF52840/
+nRF5340 only) and this document briefly recorded a decision to move the
+MCU target to the nRF52840 as a result — **that decision has been
+reverted** (see git history) once the newer, corrected data was found.
+[Compatibility table](https://ant-nrfconnect.github.io/) (redirects from the older thisisant.com compatibility URL)
+
+Further, direct confirmation that this project's actual requirement —
+**concurrent BLE + ANT+ from one firmware, on a single-core nRF52 chip** —
+is realistic: Nordic's own sample **"ANT and Bluetooth LE Heart Rate
+Monitor Relay"** does exactly that (*"aggregated data received from ANT is
+relayed and sent as Bluetooth LE notifications"*) and explicitly lists the
+plain **nRF52 DK (nrf52dk, i.e. nRF52832)** as a supported board, alongside
+nrf52840dk and nrf5340dk.
+[Sample docs](https://ant-nrfconnect.github.io/samples/ble_ant_app_hrm/README.html)
+
+**Given that, the plan is to support both chips from one firmware source
+tree**: nRF52832 stays the primary/default target (matches the existing
+KiCad schematic and BOM — no PCB rework required), with nRF52840 kept as a
+secondary supported target (e.g. for the nRF52840 Dongle already used for
+BLE bring-up, or a future higher-memory-headroom board variant). This is a
+natural fit for Zephyr, where board/chip selection is a `west build -b
+<board>` build-time parameter — see "What this means for the firmware"
+below for what is and isn't chip-specific in this codebase already.
 
 Separately, the **older, non-Zephyr "nRF5 SDK"** (classic C SDK, its own
-build system, no `west`/CMake/Zephyr) *does* support ANT+ on the nRF52832,
-via the **S212** (ANT-only) or **S332** (BLE+ANT+ concurrent) SoftDevices —
-Nordic/ANT+ Alliance bulletins explicitly confirm these are available for
-the nRF52832.
+build system) also supports ANT+ on the nRF52832 via the S212/S332
+SoftDevices — this is **not needed** now that the Zephyr add-on covers
+nRF52832 directly, but is left documented below since it's a real,
+differently-named API surface that's easy to confuse with the Zephyr one.
 [S212 product page](https://www.nordicsemi.com/Products/Development-software/S212-ANT) ·
 [tech bulletin](https://www.thisisant.com/developer/resources/tech-bulletin/updated-s212-and-s332-v091-ant-protocol-stacks-now-available-for-nordic-n)
 
-**This corrects earlier revisions of this document and of the firmware
-comments**, which described "SoftDevice S212/S332 or the nRF5 SDK ANT
-module" as if they were interchangeable options for the same toolchain.
-They're actually the same (older) generation of tooling. The real fork in
-the road is: **nRF5 SDK (old, non-Zephyr, nRF52832-capable) vs. "ANT for
-nRF Connect SDK" (new, Zephyr, currently nRF52840/nRF5340-only)** — and
-this project's existing Zephyr BLE firmware cannot pull in ANT+ on its
-current chip without either changing chip or splitting the toolchain.
+### Access & integration process (confirmed)
+- **The `sdk-ant` repository itself is access-gated**, not merely
+  "public but needs an account for the network key": both the GitHub repo
+  page and the GitHub API return 404 unauthenticated. Per the docs, access
+  is granted to ANT+ Adopters after accepting the license agreement and
+  authenticating through GitHub — i.e., sign up as an ANT+ Adopter first
+  (see "Licensing & cost" below), then request GitHub org access, before
+  any of this can actually be built.
+- **Integration mechanism**: the documented getting-started flow is
+  `west init -m "https://github.com/ant-nrfconnect/sdk-ant" --mr main &&
+  west update` — i.e. `sdk-ant` is used as the **top-level west manifest**,
+  not added as one extra project line inside this project's existing
+  manifest. In practice this likely means a separate/parallel west
+  workspace for ANT+-enabled builds, rather than a one-line addition to
+  the current one. The exact composition with an *existing* application's
+  manifest wasn't confirmed — `sdk-ant`'s own `west.yml` isn't visible
+  without Adopter+GitHub access.
+  [Getting Started](https://ant-nrfconnect.github.io/doc/getting_started.html)
+- **Kconfig**: top-level enable is `CONFIG_ANT`. For single-core chips
+  (nRF52832 and nRF52840, both used here) `CONFIG_ANT_LIBRARY_CORE`
+  applies (the nRF5340's dual-core split instead uses
+  `CONFIG_ANT_NP_HOST`/`CONFIG_ANT_NP_REMOTE` — not relevant to this
+  project). `CONFIG_ANT_CHANNEL_CONFIG` and `CONFIG_ANT_KEY_MANAGER`
+  provide channel/key helpers. `CONFIG_ANT_LICENSE_KEY` (paid, commercial)
+  vs. `CONFIG_ANT_EVALUATION_KEY` (free, eval/non-commercial) gate actual
+  radio use — see "Licensing & cost".
+  [Kconfig reference](https://ant-nrfconnect.github.io/doc/kconfig/index.html)
+- **No ready-made profile helper for this project's two use cases**:
+  Kconfig offers `CONFIG_ANT_COMMON`, `CONFIG_ANT_HRM`, `CONFIG_ANT_BSC`,
+  `CONFIG_ANT_BPWR` — but **no `CONFIG_ANT_CONTROLS` or
+  `CONFIG_ANT_ENVIRONMENT`**. The Controls (Generic) command page and the
+  Environment temperature page will need to be **hand-encoded** on top of
+  `CONFIG_ANT_COMMON`/`CONFIG_ANT_CHANNEL_CONFIG`, not pulled from a
+  ready-made profile library — reinforcing why the exact byte layouts
+  (flagged as unverified elsewhere in this document) matter and need the
+  real device profile documents from an ANT+ Adopter account.
+- A stable **32.768 kHz LF clock** (±50ppm max) is a hard requirement —
+  standard for Zephyr/BLE-capable designs already, not expected to be a
+  new constraint for either chip.
 
-### Options going forward (not yet decided)
-1. **Port to the classic nRF5 SDK for the ANT+ side, on the current
-   nRF52832.** Likely means either a second, separate firmware
-   image/toolchain alongside the existing Zephyr one (nRF5 SDK doesn't
-   use `west`/CMake), or migrating the whole project off Zephyr onto nRF5
-   SDK — which would mean redoing the BLE (`ble_gopro.c`) and sensor
-   (`temp_sensor.c`) code against a different set of APIs, losing the
-   Zephyr-specific work already done.
-2. **Move the target chip to nRF52840 or nRF5340**, both supported by the
-   Zephyr ANT+ add-on today. Keeps one unified Zephyr toolchain — the
-   existing `ble_gopro.c`/`ant_garmin.c`/`temp_sensor.c` structure would
-   mostly carry over, adding `ant_*` calls (see API surface below) instead
-   of a second toolchain. This is a **hardware change**: new module
-   footprint/pinout, KiCad schematic/PCB rework — the current design is
-   built around the E73-2G4M08S1E (nRF52832).
-3. **Reconsider whether ANT+ is required at all** for the Garmin side, e.g.
-   evaluate what BLE-based remote-control capability (if any) current
-   Garmin Edge firmware supports as an alternative. Not researched yet —
-   flagged as a question, not a verified option.
-
-No option has been chosen. This needs a decision before any real
-`sd_ant_*`/`ant_*` calls are written into `ant_garmin.c` — writing code
-against the wrong toolchain would be wasted or actively misleading work.
+### What this means for the firmware (supporting both chips)
+- `main.c`, `ble_gopro.c`, `ant_garmin.c`, and `temp_sensor.c` contain no
+  chip-specific code today (no `#ifdef` on a chip/board symbol) — this
+  should stay true. Anything that differs between the nRF52832 and
+  nRF52840 belongs in **board-specific devicetree overlays** and
+  board-specific Kconfig fragments, not in application `.c` files, per the
+  existing "Maintainability & modularity" requirement.
+- One concrete difference already in the codebase: `prj.conf`'s USB
+  CDC-ACM logging setup applies to the nRF52840 Dongle (which has native
+  USB) and is **not applicable to the nRF52832** (no native USB
+  peripheral) — the final CR2032-powered board was always going to use
+  SWD/RTT logging instead (see "Development tooling"), so this isn't a new
+  problem, but it's a concrete example of a board-specific setting that
+  needs to live in a board overlay/Kconfig fragment rather than a single
+  shared `prj.conf`, once a second board target is added.
+- No Zephyr board definition exists yet for the final custom PCB, on
+  *either* chip — only the reference `nrf52840dongle_nrf52840` board
+  (Nordic's dongle) has an overlay today. Adding one (or two, one per
+  chip) for the actual custom board is separate follow-up work, tracked
+  in "Open points".
 
 ### Licensing & cost (confirmed)
 - A free **"ANT+ Adopter"** signup at thisisant.com grants the ANT+
@@ -608,18 +668,20 @@ against the wrong toolchain would be wasted or actively misleading work.
   [`CONFIG_ANT_LICENSE_KEY` docs](https://www.thisisant.com/APIassets/ANTnRFConnectDoc/doc/kconfig/CONFIG_ANT_LICENSE_KEY.html)
 
 ### API surface (confirmed to exist; not yet used in this codebase)
-Two differently-named APIs exist, matching the two toolchains above — do
-not mix them up when eventually writing real code:
+The API this project will actually use is the Zephyr add-on's `ant_*`
+family (no `sd_` prefix): `ant_stack_init`, `ant_stack_reset`,
+`ant_network_address_set`, `ant_channel_assign`, `ant_channel_id_set`,
+`ant_channel_radio_freq_set`, `ant_channel_period_set`, `ant_channel_open`,
+`ant_broadcast_message_tx`, `ant_event_get`.
+[ANT Interface Reference](https://www.thisisant.com/APIassets/1.1.0_ANTnRFConnectDoc/doc/api/interface.html)
 
-| Toolchain | Prefix | Example calls | Source |
-|---|---|---|---|
-| Classic nRF5 SDK (S212/S332) | `sd_ant_*` | `sd_ant_channel_assign`, `sd_ant_channel_id_set`, `sd_ant_channel_radio_freq_set`, `sd_ant_channel_period_set`, `sd_ant_channel_open`, `sd_ant_broadcast_message_tx` | Public GitHub mirrors of the nRF5 SDK, e.g. [particle-iot/nrf5_sdk example](https://github.com/particle-iot/nrf5_sdk/blob/master/examples/ant/ant_relay_demo/main.c) |
-| ANT for nRF Connect SDK (Zephyr) | `ant_*` (no `sd_` prefix) | `ant_stack_init`, `ant_stack_reset`, `ant_network_address_set`, `ant_channel_assign`, `ant_channel_id_set`, `ant_channel_radio_freq_set`, `ant_channel_period_set`, `ant_channel_open`, `ant_broadcast_message_tx`, `ant_event_get` | [ANT Interface Reference](https://www.thisisant.com/APIassets/1.1.0_ANTnRFConnectDoc/doc/api/interface.html) |
-
-The nRF5 SDK zip (bundling `ant_interface.h` and the S212/S332 SoftDevice
-binaries) appears to be a plain download from Nordic's site without a
-clear account gate, but this wasn't conclusively confirmed either way.
-[Download page](https://www.nordicsemi.com/Products/Development-software/nRF5-SDK/Download)
+For reference only (not needed for this project, see the decision above):
+the older, non-Zephyr nRF5 SDK uses a **differently-named**, non-
+interchangeable `sd_ant_*` API (`sd_ant_channel_assign`,
+`sd_ant_broadcast_message_tx`, etc.), visible in public GitHub mirrors of
+the nRF5 SDK, e.g.
+[particle-iot/nrf5_sdk example](https://github.com/particle-iot/nrf5_sdk/blob/master/examples/ant/ant_relay_demo/main.c).
+Do not mix the two up if ever cross-referencing nRF5 SDK sample code.
 
 ### What's still unverified
 - The exact byte layout of the Controls (Generic) command page and the
@@ -627,6 +689,16 @@ clear account gate, but this wasn't conclusively confirmed either way.
   to access officially; not found from a public, unauthenticated source
   in this research pass. The "Page 73" figure used elsewhere in this
   document is background knowledge, not independently confirmed.
-- Whether nRF52832 support for the Zephyr ANT+ add-on is on any public
-  roadmap, or permanently excluded.
-- Whether the nRF5 SDK download truly requires no account.
+- How `sdk-ant`'s own west manifest actually composes with an *existing*
+  application's manifest (this project's) — only the "fresh workspace
+  init" flow is publicly documented; the repo's own `west.yml` isn't
+  visible without Adopter + GitHub org access.
+- Whether ANT+ Adopter GitHub org access has any review/wait time after
+  signup, and the exact steps once granted.
+- If a future nRF52840-specific board is added later: whether an
+  nRF52840-family Ebyte module (e.g. **E73-2G4M08S1C**, confirmed to
+  exist as a real shipping part) is pin-compatible with the existing
+  E73-2G4M08S1E KiCad footprint — not verified, and the nRF52840 has more
+  GPIOs than the nRF52832, so a pin-for-pin match is unlikely even within
+  the same module family. Treat as needing its own footprint, not a
+  drop-in swap, until checked against both datasheets.
