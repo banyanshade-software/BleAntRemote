@@ -3,6 +3,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
 #include <zephyr/settings/settings.h>
 
 #include <zephyr/bluetooth/bluetooth.h>
@@ -387,7 +388,14 @@ static void scan_cb(const bt_addr_le_t *addr, int8_t rssi, uint8_t adv_type,
 		return;
 	}
 
-	LOG_INF("GoPro detected (RSSI %d), stop scan & connect...", rssi);
+	{
+		char addr_str[BT_ADDR_LE_STR_LEN];
+
+		bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
+		LOG_INF("GoPro detected at %s (RSSI %d), stop scan & connect... "
+			"(compare against the bonded address logged at boot)",
+			addr_str, rssi);
+	}
 
 	if (bt_le_scan_stop()) {
 		return;
@@ -474,8 +482,19 @@ static struct bt_conn_auth_info_cb auth_info_cb = {
 	.pairing_failed = pairing_failed,
 };
 
+static void log_bond(const struct bt_bond_info *info, void *user_data)
+{
+	int *count = user_data;
+	char addr_str[BT_ADDR_LE_STR_LEN];
+
+	bt_addr_le_to_str(&info->addr, addr_str, sizeof(addr_str));
+	LOG_INF("  bond[%d]: %s", *count, addr_str);
+	(*count)++;
+}
+
 int ble_gopro_init(void)
 {
+	LOG_INF("Initializing BLE stack...");
 	int err = bt_enable(NULL);
 	if (err) {
 		LOG_ERR("bt_enable() failed (%d)", err);
@@ -483,8 +502,66 @@ int ble_gopro_init(void)
 	}
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
-		LOG_INF("+++ load settings");
-		settings_load(); /* reload saved bonding keys */
+		int settings_err = settings_load(); /* reload saved bonding keys */
+
+		if (settings_err) {
+			LOG_ERR("settings_load() failed (%d) - any saved bonding "
+				"keys were NOT reloaded, expect a fresh pairing "
+				"prompt/rejection instead of a silent reconnect",
+				settings_err);
+			for (;;) {
+				LOG_INF("settings ERR");
+				k_sleep(K_SECONDS(5));
+			}
+			//LOG_PANIC(); /* flush pending log messages before halting */
+			//k_panic();
+		} else {
+			LOG_INF("settings_load() OK");
+			/*for (;;) {
+				LOG_INF("settings ok");
+				k_sleep(K_SECONDS(5));
+			}*/
+			//k_sleep(K_MSEC(3000)); /* give the log backend a chance to flush */
+		}
+
+		/* settings_load() returning 0 only means the backend itself
+		 * is fine - it says nothing about whether any bt/keys entry
+		 * was actually found. Dump what's really in the in-memory
+		 * bond list right now so that's not a guess. */
+		int bond_count = 0;
+
+		bt_foreach_bond(BT_ID_DEFAULT, log_bond, &bond_count);
+		LOG_INF("%d bonded device(s) known after settings_load()", bond_count);
+		if ((0)){
+			for (;;) {
+				//LOG_INF("bonded %d", bond_count);
+				k_sleep(K_SECONDS(5));
+			}
+		}
+	}
+
+	/* Our OWN identity address needs to be stable across reboots too:
+	 * the GoPro looks up ITS stored LTK for us by address whenever the
+	 * pairing used LE Secure Connections (EDIV/Rand are always 0 for
+	 * LESC, so address is the only thing it can key on). Logged AFTER
+	 * settings_load() so this reflects the reloaded identity, not a
+	 * freshly-generated temporary one from bt_enable(). If this address
+	 * changes between boots, that alone explains "only works right
+	 * after pairing mode" even with the bond store above intact. */
+	{
+		bt_addr_le_t my_addrs[CONFIG_BT_ID_MAX];
+		size_t my_addr_count = ARRAY_SIZE(my_addrs);
+		char addr_str[BT_ADDR_LE_STR_LEN];
+
+		bt_id_get(my_addrs, &my_addr_count);
+		for (;;) {
+			for (size_t i = 0; i < my_addr_count; i++) {
+				bt_addr_le_to_str(&my_addrs[i], addr_str, sizeof(addr_str));
+				LOG_INF("Local identity[%zu]: %s", i, addr_str);
+			}
+			break; /* only log once, not every 5s */
+			k_sleep(K_SECONDS(5));
+		}
 	}
 
 	err = bt_conn_auth_cb_register(&auth_cb);
