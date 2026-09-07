@@ -361,12 +361,32 @@ is officially named **Environment**, not "Environment Sensor."
 - **ANT+ build integration (see "ANT+ implementation notes" at the end of
   this document)**: the chip question is resolved (nRF52832 works, no
   hardware change needed; nRF52840 kept as a secondary supported target).
-  Still open: getting ANT+ Adopter access to the gated `sdk-ant` repo, the
-  concrete west-workspace integration steps (only a "fresh workspace"
-  flow is documented, not composition with an existing manifest like this
-  project's), and confirming the project's nRF Connect SDK is upgraded to
-  v2.9.2+ (needed for nRF52832 support under the "Add-on" deployment
-  model).
+  ANT+ Adopter/GitHub org access has since been obtained, and the west-
+  workspace integration question is now resolved too — not by getting
+  access to the gated source repo, but by reading `sdk-ant`'s **public**
+  documentation site (`ant-nrfconnect.github.io`), which confirms `sdk-ant`
+  is meant to be the top-level west manifest (its own compatible `sdk-nrf`
+  gets pulled in automatically — v2.9.2 or v3.2.4 depending on the
+  `sdk-ant` version picked, see the compatibility table below), not a
+  line added to this project's existing BLE-only manifest. Note the *dev
+  sandbox* this firmware is written in still has no access of its own to
+  the gated `sdk-ant` *source* repo (confirmed via `git ls-remote` — see
+  `software/gopro_remote_fw/src/ant_garmin.c`), so the ANT+ code below
+  remains unbuilt/untested there regardless of the project's own access.
+- **ANT+ temperature broadcast — implemented, API calls confirmed,
+  profile-specific values still placeholders**: real `ant_*` calls now
+  live in `software/gopro_remote_fw/src/ant_garmin.c` (Environment
+  profile, temperature only — the Controls/button profile is still
+  deferred), with every call's signature checked against `sdk-ant`'s
+  public API docs (exact match, one real bug fixed:
+  `ant_stack_init()` must not be called directly — it's an automatic
+  `SYS_INIT` hook). Channel parameters (device type, channel period,
+  transmission type) and the temperature page's byte layout remain
+  placeholders pending the real ANT+ Environment device profile document
+  (a separate, still-gated resource at thisisant.com — the SDK doc site
+  doesn't cover device profile page layouts). See the status comment at
+  the top of that file and the firmware README's "ANT+ temperature
+  broadcast" section for the full list of what to verify.
 - **Zephyr board definition for the custom PCB**: none exists yet, for
   either chip — only the reference `nrf52840dongle_nrf52840` board
   (Nordic's prototyping dongle) has a devicetree overlay today. Needed
@@ -548,7 +568,12 @@ deployment models over time:
 | sdk-nrf version | Deployment model | sdk-ant version | Supported nRF52 chips |
 |---|---|---|---|
 | v2.6 – v2.7 | "Manifest" | v1.2.0 – v1.3.0 | nRF52840 only |
-| v2.9.2+ | "Add-on" | v2.0.0+ | **nRF52832 and nRF52840** |
+| v2.9.2 | "Add-on" | v2.0.0 | **nRF52832 and nRF52840** |
+| v3.2.4 | "Add-on" | v2.1.0 (current) | **nRF52832 and nRF52840** |
+
+(Full table, confirmed directly from the public doc site's live
+`doc/compatibility.html` page, not just background research — see
+"Access & integration process" below for how that page was reached.)
 
 **The nRF52832 already used in this project (Ebyte E73-2G4M08S1E, existing
 KiCad design) is supported**, provided the project's nRF Connect SDK is on
@@ -586,38 +611,55 @@ differently-named API surface that's easy to confuse with the Zephyr one.
 [tech bulletin](https://www.thisisant.com/developer/resources/tech-bulletin/updated-s212-and-s332-v091-ant-protocol-stacks-now-available-for-nordic-n)
 
 ### Access & integration process (confirmed)
-- **The `sdk-ant` repository itself is access-gated**, not merely
-  "public but needs an account for the network key": both the GitHub repo
-  page and the GitHub API return 404 unauthenticated. Per the docs, access
-  is granted to ANT+ Adopters after accepting the license agreement and
-  authenticating through GitHub — i.e., sign up as an ANT+ Adopter first
-  (see "Licensing & cost" below), then request GitHub org access, before
-  any of this can actually be built.
-- **Integration mechanism**: the documented getting-started flow is
-  `west init -m "https://github.com/ant-nrfconnect/sdk-ant" --mr main &&
-  west update` — i.e. `sdk-ant` is used as the **top-level west manifest**,
-  not added as one extra project line inside this project's existing
-  manifest. In practice this likely means a separate/parallel west
-  workspace for ANT+-enabled builds, rather than a one-line addition to
-  the current one. The exact composition with an *existing* application's
-  manifest wasn't confirmed — `sdk-ant`'s own `west.yml` isn't visible
-  without Adopter+GitHub access.
-  [Getting Started](https://ant-nrfconnect.github.io/doc/getting_started.html)
-  — **corroborated from the other direction**: `nrfconnect/sdk-nrf`'s own
-  `west.yml` (public, checked directly on both `main` and the `v2.9.2`
-  tag) contains **zero** reference to `ant-nrfconnect`/`sdk-ant`/ANT+ of
-  any kind. This project's existing BLE firmware manifest has nothing to
-  hook into for ANT+ — a separate workspace really is required, not just
-  an undocumented option. Nordic's own SDK docs agree: current
-  `nrfconnectdocs.nordicsemi.com` protocol-support pages for the nRF52
-  don't mention ANT/ANT+ at all (an older v2.4.4 doc page went further,
-  stating outright *"the nRF Connect SDK does not support ANT"* — true
-  for that version, superseded by the separate `sdk-ant` add-on since).
-  ANT+ support genuinely lives entirely outside `sdk-nrf`'s own tree.
-- **No public mirror or cache of `sdk-ant` exists** either: direct,
-  unauthenticated fetches (not archive/cache lookups) to both
-  `github.com/ant-nrfconnect/sdk-ant` and the GitHub API for that repo
-  return HTTP 404. The access gate is real, not just under-documented.
+- **The `sdk-ant` *source* repository itself is access-gated** (both the
+  GitHub repo page and the GitHub API return 404/"not found"
+  unauthenticated — re-checked again after ANT+ Adopter access was
+  obtained for this project, still not reachable from this dev sandbox's
+  own GitHub identity specifically, see `software/gopro_remote_fw/src/
+  ant_garmin.c`). Per the docs, access is granted to ANT+ Adopters after
+  accepting the license agreement and authenticating through GitHub.
+- **Its documentation site is public, unlike the source repo** —
+  `ant-nrfconnect.github.io` needs no authentication at all (confirmed:
+  plain unauthenticated `curl`/GitHub-API access to its own GitHub repo,
+  `ant-nrfconnect/ant-nrfconnect.github.io`, succeeds, description "Public
+  documentation for private sdk-ant repository"). This was used to
+  directly confirm most of what was previously only inferred here:
+  - **Integration mechanism — now directly confirmed, not just
+    documented for "a fresh workspace"**: `doc/compatibility.html`
+    states plainly that in the Add-on model, "Add-ons specify the
+    compatible revision of sdk-nrf in their own `west.yml` manifest
+    file" — i.e. `sdk-ant` really is the **top-level** west manifest
+    (`west init -m "https://github.com/ant-nrfconnect/sdk-ant" --mr main
+    && west update`, pulling its own matching `sdk-nrf` automatically),
+    not a project line added to this project's existing BLE-only
+    manifest. Build `gopro_remote_fw` from inside that sdk-ant-
+    initialized workspace instead. (This corroborates the earlier,
+    weaker finding that `nrfconnect/sdk-nrf`'s own public `west.yml` has
+    zero ANT+ references — there was genuinely nothing to hook into.)
+    [Getting Started](https://ant-nrfconnect.github.io/doc/getting_started.html) ·
+    [Compatibility](https://ant-nrfconnect.github.io/doc/compatibility.html)
+  - **API signatures — now directly confirmed**, not inferred by
+    analogy with the nRF5 SDK: `doc/api/interface.html` gives the exact
+    signature of every `ant_*` call this project uses (see `ant_garmin.c`
+    for the full list and how each one is used) — arg order and types
+    all matched what had been guessed by analogy, except one real
+    correction: `ant_stack_init()` is an internal `SYS_INIT` hook called
+    automatically at boot from the `CONFIG_ANT_LICENSE_KEY`/
+    `CONFIG_ANT_EVALUATION_KEY` Kconfig value, **not** meant to be called
+    directly from application code (an earlier version of `ant_garmin.c`
+    did call it directly — fixed once this was found).
+  - **Kconfig options — now directly confirmed** by reading the live
+    Kconfig doc pages (not web search): `CONFIG_ANT`,
+    `CONFIG_ANT_LIBRARY_CORE` (auto-selects `NRFX_GPPI`, `MPSL`,
+    `ENTROPY_GENERATOR`), `CONFIG_ANT_CHANNEL_CONFIG`,
+    `CONFIG_ANT_KEY_MANAGER`, `CONFIG_ANT_EVALUATION_KEY`/
+    `CONFIG_ANT_LICENSE_KEY` all exist exactly as described below, and
+    `CONFIG_ANT` itself explicitly depends on `SOC_NRF52832 ||
+    SOC_NRF52840 || ...` — direct Kconfig-level confirmation (not just a
+    compatibility-table claim) that both chips are first-class targets.
+  - **No mirror of the gated *source* repo exists** (still 404
+    unauthenticated) — only its documentation is public; the access gate
+    on the actual code is real, not just under-documented.
 - **A closer-fit reference sample, once access is available**:
   `ant_broadcast_tx`/`ant_broadcast_rx` (plain ANT+ broadcast, no BLE
   relay) is a better template for this project's needs than the
@@ -690,13 +732,28 @@ differently-named API surface that's easy to confuse with the Zephyr one.
   [Licensing page](https://www.thisisant.com/developer/ant/licensing) ·
   [`CONFIG_ANT_LICENSE_KEY` docs](https://www.thisisant.com/APIassets/ANTnRFConnectDoc/doc/kconfig/CONFIG_ANT_LICENSE_KEY.html)
 
-### API surface (confirmed to exist; not yet used in this codebase)
-The API this project will actually use is the Zephyr add-on's `ant_*`
-family (no `sd_` prefix): `ant_stack_init`, `ant_stack_reset`,
-`ant_network_address_set`, `ant_channel_assign`, `ant_channel_id_set`,
-`ant_channel_radio_freq_set`, `ant_channel_period_set`, `ant_channel_open`,
-`ant_broadcast_message_tx`, `ant_event_get`.
-[ANT Interface Reference](https://www.thisisant.com/APIassets/1.1.0_ANTnRFConnectDoc/doc/api/interface.html)
+### API surface (confirmed signatures; now used for real in ant_garmin.c)
+The Zephyr add-on's `ant_*` family (no `sd_` prefix) — exact signatures
+confirmed from the public `doc/api/interface.html` page:
+```c
+ant_err_t ant_network_address_set(uint8_t ucNetwork, const uint8_t *aucNetworkKey);
+ant_err_t ant_channel_assign(uint8_t ucChannel, uint8_t ucChannelType, uint8_t ucNetwork, uint8_t ucExtAssign);
+ant_err_t ant_channel_id_set(uint8_t ucChannel, uint16_t usDeviceNumber, uint8_t ucDeviceType, uint8_t ucTransmitType);
+ant_err_t ant_channel_radio_freq_set(uint8_t ucChannel, uint8_t ucFreq);
+ant_err_t ant_channel_period_set(uint8_t ucChannel, uint16_t usPeriod);
+ant_err_t ant_channel_open(uint8_t ucChannel); /* macro for ant_channel_open_with_offset(ch, CHANNEL_START_OFFSET_NONE) */
+ant_err_t ant_broadcast_message_tx(uint8_t ucChannel, uint8_t ucSize, uint8_t *aucMesg);
+ant_err_t ant_event_get(uint8_t *pucChannel, uint8_t *pucEvent, uint8_t *aucANTMesg); /* non-blocking getter, no separate signal/callback API on single-core */
+```
+`ant_stack_init(const uint8_t *aucLicenseKey)` also exists but is an
+internal `SYS_INIT` hook — application code does not call it directly
+(see above). `CHANNEL_TYPE_MASTER` (0x10), `EVENT_TX` (0x03),
+`EVENT_CHANNEL_CLOSED` (0x07) and `ANT_STANDARD_DATA_PAYLOAD_SIZE` (8)
+are confirmed constants from `doc/api/parameters.html`. All of the above
+are now used in `software/gopro_remote_fw/src/ant_garmin.c` — see its
+top-of-file status comment for the full source/confidence breakdown.
+[ANT Interface Reference](https://ant-nrfconnect.github.io/doc/api/interface.html) ·
+[ANT Parameters Reference](https://ant-nrfconnect.github.io/doc/api/parameters.html)
 
 For reference only (not needed for this project, see the decision above):
 the older, non-Zephyr nRF5 SDK uses a **differently-named**, non-
@@ -709,21 +766,24 @@ Do not mix the two up if ever cross-referencing nRF5 SDK sample code.
 ### What's still unverified
 - The exact byte layout of the Controls (Generic) command page and the
   Environment temperature page — both require the free ANT+ Adopter login
-  to access officially; not found from a public, unauthenticated source
-  in this research pass. The "Page 73" figure used elsewhere in this
-  document is background knowledge, not independently confirmed.
-- How `sdk-ant`'s own west manifest actually composes with an *existing*
-  application's manifest (this project's) — only the "fresh workspace
-  init" flow is publicly documented; the repo's own `west.yml` isn't
-  visible without Adopter + GitHub org access. Corroborated as a real gap
-  (not just under-documented): `nrfconnect/sdk-nrf`'s own public `west.yml`
-  has no ANT+ reference at all, and no public mirror/cache of `sdk-ant`
-  could be found (direct 404s on both the GitHub page and API,
-  double-checked with no archived/cached sources used per user
-  instruction) — so this remains genuinely unknown until someone with
-  Adopter + GitHub access actually looks.
+  to thisisant.com to access officially (a different gate than the
+  `sdk-ant` GitHub access below — the public `ant-nrfconnect.github.io`
+  SDK documentation site does not cover device profile page layouts,
+  confirmed by checking its live Kconfig option list: only
+  `CONFIG_ANT_HRM`/`CONFIG_ANT_BSC`/`CONFIG_ANT_BPWR` profile libraries
+  exist, no Environment or Controls). The "Page 73" figure used elsewhere
+  in this document is background knowledge, not independently confirmed.
+- ~~How `sdk-ant`'s own west manifest actually composes with an *existing*
+  application's manifest~~ — **now resolved**: it doesn't compose with an
+  existing manifest at all; `sdk-ant` is meant to be the top-level
+  manifest (see "Access & integration process" above, confirmed directly
+  from the public `ant-nrfconnect.github.io` doc site, not inferred).
 - Whether ANT+ Adopter GitHub org access has any review/wait time after
-  signup, and the exact steps once granted.
+  signup, and the exact steps once granted — the *source* repo
+  (`github.com/ant-nrfconnect/sdk-ant`) is still unreachable from this
+  dev sandbox's own GitHub identity even though this project's own ANT+
+  Adopter access has since been obtained, so this remains unverified from
+  here specifically.
 - If a future nRF52840-specific board is added later: whether an
   nRF52840-family Ebyte module (e.g. **E73-2G4M08S1C**, confirmed to
   exist as a real shipping part) is pin-compatible with the existing
