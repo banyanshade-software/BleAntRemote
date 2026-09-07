@@ -337,6 +337,28 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	start_scan();
 }
 
+/*
+ * Fires once the Feature Exchange procedure completes (GoPro's
+ * LL_PERIPHERAL_FEATURE_REQ / our LL_FEATURE_RSP, seen in the sniffer
+ * trace) - requires CONFIG_BT_REMOTE_INFO=y (see prj.conf), otherwise
+ * the Host never surfaces this above the controller/HCI layer.
+ */
+static void remote_info_available(struct bt_conn *conn,
+				    struct bt_conn_remote_info *remote_info)
+{
+	if (remote_info->type != BT_CONN_TYPE_LE) {
+		return;
+	}
+
+	const uint8_t *feat = remote_info->le.features;
+
+	LOG_HEXDUMP_INF(feat, 8, "GoPro LE feature set:");
+	LOG_INF("GoPro features: enc=%d dle=%d 2M_phy=%d coded_phy=%d privacy=%d",
+		BT_FEAT_LE_ENCR(feat), BT_FEAT_LE_DLE(feat),
+		BT_FEAT_LE_PHY_2M(feat), BT_FEAT_LE_PHY_CODED(feat),
+		BT_FEAT_LE_PRIVACY(feat));
+}
+
 static void security_changed(struct bt_conn *conn, bt_security_t level,
 			      enum bt_security_err err)
 {
@@ -352,6 +374,7 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
 	.security_changed = security_changed,
+	.remote_info_available = remote_info_available,
 };
 
 /* -------------------------------------------------------------------

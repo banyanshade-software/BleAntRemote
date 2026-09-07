@@ -9,7 +9,7 @@ and the main file only knows about the button/action state machine.
 |------|------|
 | `src/main.c` | Main finite-state machine: button GPIO/interrupt setup, action queue, dispatch to the modules below. No BLE/ANT+ API usage. |
 | `src/ble_gopro.[ch]` | BLE central role driver for the GoPro (Open GoPro API): stack init, bonding, scan/connect, GATT discovery, shutter command. |
-| `src/ant_garmin.[ch]` | ANT+ driver for the Garmin Edge: Controls-profile (Generic) button commands, plus the temperature broadcast session (idle by default; any button press arms a bounded, periodic broadcast — see below). ANT+ transmission itself is currently a stub, pending ANT+ Adopter access and build integration — see below. |
+| `src/ant_garmin.[ch]` | ANT+ driver for the Garmin Edge. Temperature broadcast (Environment profile) is now implemented for real, using sdk-ant's `ant_*` API — see below for what's still unverified. The Controls-profile (Generic) button commands remain a stub, deferred to a follow-up pass. |
 | `src/temp_sensor.[ch]` | Reads the nRF52832's internal die temperature sensor (no external thermistor). Called internally by `ant_garmin.c`'s broadcast timer. |
 
 ## What this firmware does today
@@ -23,8 +23,10 @@ and the main file only knows about the button/action state machine.
 - 2 buttons wired as GPIO (Camera ON / Camera OFF) → send the
   corresponding shutter command (`03 01 01 01` / `03 01 01 00`).
 - Any button press also arms the temperature broadcast session (see
-  below) — the timers run today, only the actual ANT+ transmission is
-  a stub.
+  below), which now really transmits over ANT+ (Environment profile) —
+  see "ANT+ temperature broadcast" below for the build/access status
+  and what's still unverified about the channel parameters and page
+  layout.
 
 ## Temperature broadcast session
 The internal temperature sensor is **idle by default**: no periodic
@@ -56,25 +58,71 @@ official `central_hr` / `peripheral` examples), but **you'll need to build
 it and fix any minor syntax errors** on your side — it's a solid starting
 point, not a validated binary.
 
+## ANT+ temperature broadcast (Environment profile)
+Implemented in `src/ant_garmin.c` using Nordic's Zephyr-based ANT+ add-on
+(`sdk-ant`). The add-on's **source repo** is gated (ANT+ Adopter +
+GitHub org access), but its **documentation site**,
+[ant-nrfconnect.github.io](https://ant-nrfconnect.github.io), is public —
+no auth needed — and was used to check this file's `ant_*` calls
+against the real, confirmed API (exact signatures, not guesses). See the
+large status comment at the top of `ant_garmin.c` for exactly what that
+covers vs. what's still unverified (the ANT+ Environment device profile
+document itself — device type, channel period, and the temperature
+page's byte layout — is gated separately, at thisisant.com).
+
+**Confirmed from that public doc site** (`doc/compatibility.html`,
+`doc/getting_started.html`):
+| sdk-ant | sdk-nrf | nRF52 support |
+|---|---|---|
+| v2.0.0 | v2.9.2 | nRF52832, nRF52840 |
+| v2.1.0 (current) | v3.2.4 | nRF52832, nRF52840 |
+
+Both versions support this project's chip (nRF52832) and the nRF52840
+dongle used for bring-up — pick whichever pairing you prefer (v2.1.0/
+v3.2.4 for the latest, v2.0.0/v2.9.2 if you want the exact pairing this
+project's earlier research targeted).
+
+Still needed before this builds or is trustworthy against a real Garmin
+Edge:
+- **Set up a west workspace from `sdk-ant`.** Confirmed (not just a
+  "fresh workspace only" guess anymore): sdk-ant's Add-on model "specify
+  the compatible revision of sdk-nrf in their own `west.yml` manifest
+  file" — i.e. `sdk-ant` really is meant to be the **top-level**
+  manifest (`west init -m "https://github.com/ant-nrfconnect/sdk-ant"
+  --mr main && west update`), which pulls its own matching `sdk-nrf`
+  automatically. It is not a one-line addition to this project's
+  existing (BLE-only) NCS workspace manifest. Build `gopro_remote_fw`
+  from inside that sdk-ant-initialized workspace instead (same "copy the
+  app folder in, then `west build`" flow as today, just a different
+  workspace root). This dev sandbox still can't do the `west init` step
+  itself (`git ls-remote` to the actual source repo returns "Repository
+  not found"), so this remains untested here regardless.
+- **Set your real ANT+ network key.** `ant_garmin.c`'s
+  `ant_plus_network_key` is an all-zero placeholder on purpose —
+  the real key is licensed data from your ANT+ Adopter account and
+  must not be committed to a (possibly public) repo. `ant_garmin_init()`
+  logs a warning at boot if it's still all-zero.
+- **Verify the channel parameters and page layout** against the real
+  ANT+ Environment device profile document (thisisant.com, ANT+ Adopter
+  access) — device type, channel period, transmission type, and the
+  temperature field's byte offset in the broadcast page are all
+  placeholders; the SDK doc site above doesn't cover them (it only
+  ships ready profile libraries for Bike Power/Speed-Cadence/Heart Rate,
+  confirmed via its live Kconfig option list — Environment and Controls
+  aren't among them, so hand-encoding is genuinely required, not just
+  undocumented).
+
+The Garmin **Controls (Generic)** button commands (page right/left, lap)
+are still a stub (`ant_garmin_handle_button()`) — deferred to a
+follow-up pass; only the temperature broadcast was in scope for this one.
+
 ## What's still missing (intentionally, see prior discussion)
-1. **ANT+ transmission itself (3 Garmin buttons + temperature broadcast)**:
-   the chip is **not** the blocker — Nordic's Zephyr-based ANT+ add-on
-   (`sdk-ant`) supports the nRF52832 used here directly (current "Add-on"
-   deployment model, nRF Connect SDK v2.9.2+), so no chip change is
-   needed; the project also plans to support the nRF52840 as a secondary
-   target from the same firmware. See `doc/gopro_garmin_remote_specs.md`,
-   "ANT+ implementation notes" for the full sourcing (this corrects an
-   earlier, incomplete assessment, visible in this project's git history,
-   that briefly recorded a decision to switch chips). What's still needed:
-   ANT+ Adopter + GitHub org access to the gated `sdk-ant` repo, and
-   integrating its west workspace into this project's build — not done
-   yet. Until then, `ant_garmin_handle_button()` and the internal
-   `ant_garmin_send_temperature()` remain stubs that just log a warning.
-   The session *timing* (see "Temperature broadcast session" above)
-   already runs independently of it. The exact
-   ANT+ page layout for both the button commands (Controls profile,
-   Generic use-case) and the temperature broadcast (Environment profile)
-   is also unverified — see the specs doc.
+1. **ANT+ Controls profile (3 Garmin buttons)**: not implemented —
+   `ant_garmin_handle_button()` remains a stub that just logs a warning.
+   Same `sdk-ant` access/build prerequisites as the temperature broadcast
+   above apply once this is picked up; the exact page layout (believed
+   Page 73, unverified) is likewise pending ANT+ Adopter profile-doc
+   access — see the specs doc.
 2. **Fine-grained power management (System OFF)**: the dongle is
    USB-powered during testing, so not critical right now. Needs to be
    revisited for the final CR2032 version (see the "wake on PORT event"
