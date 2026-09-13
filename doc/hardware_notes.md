@@ -240,16 +240,104 @@ doesn't check out against the real datasheet.
 datasheet check above) — the P-MOSFET protection stage stays in the
 BOM.
 
-**Not chosen / alternatives considered**: MPD's `BK-913`/`BC-2400` family
-(also THT, PC-pin, similarly priced/stocked at DigiKey) would be an
-equally valid substitute if the Keystone part becomes unavailable — same
-"marking, not hard keying" caveat applies to those too.
-[DigiKey: MPD BK-913 CR2032 coin cell holders](https://www.digikey.com/en/videos/m/mpd-memory-protection-devices/mpd-bk913-cr2032-coin-cell-holders--digikey-daily) ·
-[DigiKey: MPD BC-2400 narrow profile CR2032 battery retainer](https://www.digikey.com/en/product-highlight/m/mpd/bc-2400-narrow-profile-cr2032-battery-retainer)
+---
+
+## 5. Buttons — size, sealing, sourcing
+
+**Requirement** (per project owner): 4 or 5 momentary push buttons
+(2 for the camera, page-left/page-right for the Garmin, optionally a
+5th — see "Handling of the 2 camera buttons" in the specs doc's open
+points for whether camera ON/OFF stays 2 separate buttons), each:
+- large enough to operate **with cycling gloves on** — actuator
+  diameter roughly **7–10mm**, possibly a bit less,
+- **rain-resistant** (splashing/dripping water while riding, not
+  submersion),
+- **easy to source and cheap**.
+
+**Rain-resistant vs. waterproof — refining the IP target.** "Rain on a
+handlebar" is the IEC 60529 **IP65** condition (dust-tight + protected
+against low-pressure water jets from any direction), not the stricter
+**IP67/IP68** (temporary/continuous full immersion) that most
+"waterproof switch" marketing copy leads with. Any switch rated IP65 or
+better covers the actual requirement here — IP67-rated parts (common
+and not meaningfully pricier in this switch class) are fine too, just
+not something to pay extra to chase beyond IP65.
+
+**Two realistic sourcing paths, both fitting a 7–10mm+ actuator:**
+
+1. **Generic 12mm metal waterproof panel-mount momentary switch** — the
+   ubiquitous "12mm waterproof push button" sold on AliExpress, Amazon,
+   Walmart, eBay by many overlapping vendors (e.g. Geekworm's `PSW12`,
+   APIELE's 12mm line, and dozens of unbranded equivalents) — round or
+   flat metal head, screws into a drilled panel hole through a threaded
+   bushing with a nut and (usually) a rubber washer/O-ring, 2 wire
+   leads or a small JST pigtail, commonly advertised at **IP65/IP67**.
+   - **Pros**: extremely cheap (roughly $0.30–1/unit at any real
+     quantity), the 12mm metal head is comfortably above the 7–10mm
+     glove-friendly target, and because it's a *panel-mount* part, its
+     own bushing/nut/washer becomes part of the enclosure's seal at
+     that hole — convenient given the enclosure sealing is still an
+     open item (specs doc §4).
+   - **Caveat, consistent with this document's sourcing-verification
+     policy**: this is a commodity part sold under many house-brand
+     names with no single traceable manufacturer datasheet — IP65/IP67
+     claims here are marketing copy, not a certificate from a named
+     manufacturer. Fine for a prototype/small-batch hobby build (which
+     matches this project's hand-solder, no-reflow-oven approach
+     already noted in §1), less fine if a rigorous, auditable BOM is
+     ever required.
+     [Geekworm PSW12 — 12mm metal waterproof momentary switch](https://geekworm.com/products/psw12) ·
+     [APIELE 12mm push button switches](https://www.apiele.com/collections/12mm-push-button-switch-latching-momentary)
+2. **Name-brand, distributor-stocked IP67 panel-mount momentary
+   switch** — e.g. **APEM `IPR3SAD`/`IBR3SAD` series** (round actuator,
+   **12.2mm or 13.6mm panel cutout**, SPST, IP67, IK06 impact rating)
+   or the similarly-specced **EOZ 10mm-cutout IP67 momentary switch**,
+   both sold through RS Components (and equivalents exist at
+   DigiKey/Mouser under other brands, e.g. C&K's sealed switch lines).
+   - **Pros**: a real manufacturer + datasheet behind the IP67 claim,
+     consistent quality/tolerances across batches, still a simple
+     screw-through-panel mount with the same sealing-at-the-hole
+     benefit as option 1.
+   - **Cons**: a few dollars per unit rather than well under $1 — a
+     real cost difference at 4–5 buttons/unit, though still a small
+     fraction of total BOM cost.
+   [APEM IP-momentary series](https://www.apem.com/panel-switches/pushbutton-switches/ip-momentary) ·
+   [RS: APEM IBR3SAD100, 12.2mm cutout, IP67](https://uk.rs-online.com/web/p/push-button-switches/0225123) ·
+   [RS: EOZ, 10mm cutout, SPST, IP67](https://uk.rs-online.com/web/p/push-button-switches/1156053?gb=s)
+
+**Recommendation**: start prototyping with option 1 (generic 12mm
+panel-mount switch) given the cost/availability priorities stated and
+this project's existing hobby-grade sourcing pattern (CR2032, hand
+solder, no reflow) — fall back to option 2 (APEM/EOZ) if consistent
+quality/traceability becomes a concern once real units are built and
+tested outdoors.
+
+**Mechanical note — this changes wiring, not firmware.** Unlike the
+small PCB-mount tact switches implied by the specs doc's original
+"individual GPIOs, no matrix" wording, both options above are
+**panel-mount** parts: they bolt through the enclosure wall and connect
+to the PCB by two wire leads each, not by sitting directly on the
+board. The GPIO-per-button, active-low, pull-up firmware design is
+unaffected — each switch still just shorts one GPIO to ground when
+pressed — but the PCB needs a small wire-to-board connection point per
+button (a simple 2-pin header/pad works) instead of a button footprint,
+and the enclosure design needs a drilled/molded hole per button sized
+to its panel cutout (12mm, or 10–13.6mm for option 2).
+
+**Open points**:
+- Final button count (4 vs. 5) — tied to the still-open "Handling of
+  the 2 camera buttons" question in the specs doc.
+- Final part choice between option 1 and option 2 above, and its exact
+  panel cutout diameter, once the enclosure design starts (specs doc
+  §4, "Enclosure").
+- Real-world IP65 validation once a prototype enclosure + buttons
+  exist — actual sealing depends as much on how the switch meets the
+  enclosure (gasket/O-ring, panel thickness, torque on the mounting
+  nut) as on the switch's own rating.
 
 ---
 
-## 5. Open points (hardware)
+## 6. Open points (hardware)
 
 - **P-MOSFET reverse-polarity stage** (§3) — part selection (Vgs(th),
   Rds(on) at the CR2032's low current levels, package size) not yet
@@ -257,5 +345,7 @@ equally valid substitute if the Keystone part becomes unavailable — same
 - **SWD header (`J1`) wiring convention** — make sure schematic/BOM
   notes explicitly document "sense-only, board stays coin-cell-powered
   during programming" (§2) so it isn't miswired as a power line later.
+- **Button hardware** (§5) — part choice (generic vs. name-brand),
+  final count, panel cutout size — all pending the enclosure design.
 - Everything else affecting the PCB (enclosure, mounting, sealing) is
   still tracked in `gopro_garmin_remote_specs.md` §4 ("Open points").
