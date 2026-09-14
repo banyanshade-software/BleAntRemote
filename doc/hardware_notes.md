@@ -263,77 +263,91 @@ better covers the actual requirement here — IP67-rated parts (common
 and not meaningfully pricier in this switch class) are fine too, just
 not something to pay extra to chase beyond IP65.
 
-**Two realistic sourcing paths, both fitting a 7–10mm+ actuator:**
+**Revised requirement (user correction #1): PCB-mount, not
+panel-mount.** The panel-mount switches originally proposed here
+(bolted through the enclosure wall, wired to the board) are the wrong
+shape for a genuinely compact design — they need standoff depth behind
+the panel for the switch body/bushing/nut, and separate wiring.
+**Soldered directly onto the PCB** is both more compact and simpler to
+assemble; that constrains the choice to a *sealed tactile switch*, not
+a generic panel-mount button.
 
-1. **Generic 12mm metal waterproof panel-mount momentary switch** — the
-   ubiquitous "12mm waterproof push button" sold on AliExpress, Amazon,
-   Walmart, eBay by many overlapping vendors (e.g. Geekworm's `PSW12`,
-   APIELE's 12mm line, and dozens of unbranded equivalents) — round or
-   flat metal head, screws into a drilled panel hole through a threaded
-   bushing with a nut and (usually) a rubber washer/O-ring, 2 wire
-   leads or a small JST pigtail, commonly advertised at **IP65/IP67**.
-   - **Pros**: extremely cheap (roughly $0.30–1/unit at any real
-     quantity), the 12mm metal head is comfortably above the 7–10mm
-     glove-friendly target, and because it's a *panel-mount* part, its
-     own bushing/nut/washer becomes part of the enclosure's seal at
-     that hole — convenient given the enclosure sealing is still an
-     open item (specs doc §4).
-   - **Caveat, consistent with this document's sourcing-verification
-     policy**: this is a commodity part sold under many house-brand
-     names with no single traceable manufacturer datasheet — IP65/IP67
-     claims here are marketing copy, not a certificate from a named
-     manufacturer. Fine for a prototype/small-batch hobby build (which
-     matches this project's hand-solder, no-reflow-oven approach
-     already noted in §1), less fine if a rigorous, auditable BOM is
-     ever required.
-     [Geekworm PSW12 — 12mm metal waterproof momentary switch](https://geekworm.com/products/psw12) ·
-     [APIELE 12mm push button switches](https://www.apiele.com/collections/12mm-push-button-switch-latching-momentary)
-2. **Name-brand, distributor-stocked IP67 panel-mount momentary
-   switch** — e.g. **APEM `IPR3SAD`/`IBR3SAD` series** (round actuator,
-   **12.2mm or 13.6mm panel cutout**, SPST, IP67, IK06 impact rating)
-   or the similarly-specced **EOZ 10mm-cutout IP67 momentary switch**,
-   both sold through RS Components (and equivalents exist at
-   DigiKey/Mouser under other brands, e.g. C&K's sealed switch lines).
-   - **Pros**: a real manufacturer + datasheet behind the IP67 claim,
-     consistent quality/tolerances across batches, still a simple
-     screw-through-panel mount with the same sealing-at-the-hole
-     benefit as option 1.
-   - **Cons**: a few dollars per unit rather than well under $1 — a
-     real cost difference at 4–5 buttons/unit, though still a small
-     fraction of total BOM cost.
-   [APEM IP-momentary series](https://www.apem.com/panel-switches/pushbutton-switches/ip-momentary) ·
-   [RS: APEM IBR3SAD100, 12.2mm cutout, IP67](https://uk.rs-online.com/web/p/push-button-switches/0225123) ·
-   [RS: EOZ, 10mm cutout, SPST, IP67](https://uk.rs-online.com/web/p/push-button-switches/1156053?gb=s)
+**Revised requirement (user correction #2): through-hole, not SMD.**
+The first PCB-mount candidate proposed here (APEM/MEC's `Ultramec 6C`)
+was surface-mount — ruled out, since this project's hand-solder-with-an-iron
+approach (already the rationale for the Ebyte module's extended-pad
+footprint in §1) favors through-hole parts. That rules out most
+"low-profile sealed keypad switch + floating cap" families, which
+tend to be SMD-first (including Ultramec 6C and C&K's KSE mentioned
+in an earlier revision of this section) — but not all of them.
 
-**Recommendation**: start prototyping with option 1 (generic 12mm
-panel-mount switch) given the cost/availability priorities stated and
-this project's existing hobby-grade sourcing pattern (CR2032, hand
-solder, no reflow) — fall back to option 2 (APEM/EOZ) if consistent
-quality/traceability becomes a concern once real units are built and
-tested outdoors.
+**Recommendation: APEM/MEC `Multimec 5G` series, through-hole, with a
+round "floating cap" accessory.**
+- **Switch itself**: **through-hole**, IP67 sealed to IEC 60529 (PPS
+  housing + actuator, **silicone rubber sealing**, stainless steel
+  contact springs) — a genuinely sealed switch, not "sealed by an
+  external boot." Base footprint **10mm x 10mm, 6.4mm body height**,
+  rated **10 million actuations** on the general 5G platform (a
+  specific through-hole/cap combination found at RS is speced to
+  500,000 — check the exact ordering code chosen against its own
+  datasheet page, cycle rating varies by variant).
+  [Mouser: Multimec 5 series datasheet — 10M actuations, IP67 sealing](https://www.mouser.com/datasheet/2/26/Apem_08222017_Multimec_5G-1158362.pdf) ·
+  [TTI: APEM Multimec 5G series datasheet](https://www.tti.com/content/dam/tti-commons/supplier/apem/doc/apem-multimec-5g-series-switches-datasheet-specifications.pdf)
+- **What reaches the 7–10mm actuator target without an SMD floating
+  cap**: the 5G platform takes the same "separately-molded oversized
+  cap on a compact sealed switch" approach as the SMD Ultramec 6C
+  considered earlier, just on a through-hole base — e.g. cap code
+  **`1ES`, a round cap Ø9.6mm**, sitting right inside the requested
+  7–10mm window, or the plain round polyamide cap seen in a stocked RS
+  variant at **Ø12mm** (slightly larger) if a bigger target is
+  preferred. Total stack height (switch body + this class of cap) is
+  on the order of **~12.5mm** per the datasheet — noticeably more than
+  the bare 2.5–6.4mm switch body, since a sealed, glove-sized cap
+  necessarily adds some stack-up; treat this as the real constraint on
+  enclosure thickness behind each button, not the switch body alone.
+  [Enika: Multimec 5G through-hole dimensions incl. 1ES cap](https://www.enika.eu/data/files/3Fxx.pdf)
+- **Widely available, in through-hole, at mainstream distributors**:
+  confirmed stocked at **RS Components** (e.g. `5ETH935+1SS09-12.0`
+  with the 12mm polyamide round cap, IP67, silicone-sealed, 2mm
+  recommended panel thickness), with the wider Multimec 5G platform
+  also documented via Mouser/Farnell/TTI datasheets — this is a
+  standard, multi-sourced industrial switch family, not a boutique or
+  single-distributor part.
+  [RS: MEC IP67 round-button tactile switch, 12mm, through hole](https://uk.rs-online.com/web/p/tactile-switches/0431926)
+- **Hand-solder compatibility**: through-hole pins, no reflow needed —
+  matches the project's existing iron-solder approach better than the
+  SMD Ultramec 6C did.
+- **Bonus for this project's 4–5 button layout**: like the Ultramec 6C,
+  caps come in multiple colors (the RS-listed variants above are
+  black/grey/red/white combinations) — useful for marking the two
+  camera buttons distinctly from the Garmin page-left/page-right/lap
+  buttons without separate labeling.
 
-**Mechanical note — this changes wiring, not firmware.** Unlike the
-small PCB-mount tact switches implied by the specs doc's original
-"individual GPIOs, no matrix" wording, both options above are
-**panel-mount** parts: they bolt through the enclosure wall and connect
-to the PCB by two wire leads each, not by sitting directly on the
-board. The GPIO-per-button, active-low, pull-up firmware design is
-unaffected — each switch still just shorts one GPIO to ground when
-pressed — but the PCB needs a small wire-to-board connection point per
-button (a simple 2-pin header/pad works) instead of a button footprint,
-and the enclosure design needs a drilled/molded hole per button sized
-to its panel cutout (12mm, or 10–13.6mm for option 2).
+**Why not a smaller, lower-stack sealed THT switch instead**: sealed
+THT tact switches with actuators already in the 7–10mm range and a
+sub-10mm total stack do not appear to exist as a single stocked part —
+this class of switch (CIT's `STV` series, C&K's sealed sealed lines,
+etc.) sticks to the same small-actuator-plus-cap pattern as the SMD
+world once sealing is required; the Multimec 5G's ~12.5mm stack is
+close to the practical minimum for "sealed + through-hole + big enough
+for a gloved finger" today, not a suboptimal pick within that
+constraint set.
 
 **Open points**:
 - Final button count (4 vs. 5) — tied to the still-open "Handling of
   the 2 camera buttons" question in the specs doc.
-- Final part choice between option 1 and option 2 above, and its exact
-  panel cutout diameter, once the enclosure design starts (specs doc
-  §4, "Enclosure").
-- Real-world IP65 validation once a prototype enclosure + buttons
-  exist — actual sealing depends as much on how the switch meets the
-  enclosure (gasket/O-ring, panel thickness, torque on the mounting
-  nut) as on the switch's own rating.
+- Pick the exact cap code (`1ES` Ø9.6mm vs. the Ø12mm polyamide round
+  cap) once the enclosure's front-panel button-hole size is decided,
+  and get a firm per-unit price for the switch+cap combination for the
+  BOM.
+- The ~12.5mm total switch+cap stack height now sets a floor on the
+  enclosure's thickness behind each button — fold this into the
+  enclosure design (specs doc §4).
+- Real-world IP65/IP67 validation once a prototype board + enclosure
+  exist — with a PCB-mount switch, sealing at the enclosure depends on
+  how the case meets the PCB around each button (a gasket, or the
+  switch's own panel-thickness spec, at the enclosure's button
+  openings).
 
 ---
 
@@ -345,7 +359,10 @@ to its panel cutout (12mm, or 10–13.6mm for option 2).
 - **SWD header (`J1`) wiring convention** — make sure schematic/BOM
   notes explicitly document "sense-only, board stays coin-cell-powered
   during programming" (§2) so it isn't miswired as a power line later.
-- **Button hardware** (§5) — part choice (generic vs. name-brand),
-  final count, panel cutout size — all pending the enclosure design.
+- **Button hardware** (§5) — `Multimec 5G` + cap part numbers
+  (`1ES` vs. the 12mm polyamide round cap) to lock down, ~12.5mm
+  switch+cap stack height to fold into the enclosure design, final
+  button count — all pending the enclosure design and a first
+  prototype board.
 - Everything else affecting the PCB (enclosure, mounting, sealing) is
   still tracked in `gopro_garmin_remote_specs.md` §4 ("Open points").
