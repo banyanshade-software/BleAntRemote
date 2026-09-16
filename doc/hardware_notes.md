@@ -351,7 +351,216 @@ constraint set.
 
 ---
 
-## 6. Open points (hardware)
+## 6. Alternative: membrane keypad (ZX81-style)
+
+**The comparison is apt.** A membrane keypad is exactly the technology
+behind the ZX81's flat keyboard (and calculators, microwave panels,
+medical-device front panels since): a thin flexible sandwich — usually
+two printed-circuit polyester layers with a spacer between them, a
+metal "snap dome" under each key position for tactile click, and a
+printed graphic overlay on top — instead of discrete mechanical
+switches. It is a legitimate, very compelling alternative to the
+Multimec 5G recommendation in §5 on exactly the axis this project cares
+about: **compactness**.
+
+- **Thickness**: a standard (non-waterproofed) membrane switch stack is
+  on the order of **~0.7mm**; a waterproofed version (thicker overlay +
+  edge-sealing adhesive) is on the order of **~1.4mm** — vs. the
+  **~12.5mm** total stack for a Multimec 5G switch + oversized cap
+  (§5). This is the single biggest advantage: essentially the entire
+  vertical budget a switch+cap combo needs disappears.
+  [LID/tactilemembrane: standard vs. waterproof membrane switch stack-up](https://tactilemembrane.com/waterproof-membrane-switch-harsh-environment-design/)
+- **Sealing**: the membrane is bonded to the front panel with a
+  continuous perimeter adhesive (e.g. 3M acrylic adhesive films
+  specifically sold for this), so the "sealing surface" is the whole
+  keypad sheet, not a per-button gasket — **IP65/IP67 is a normal,
+  well-documented outcome** for this construction, not a stretch.
+  [LID/tactilemembrane: IP67/NEMA 4X sealed membrane switch design](https://tactilemembrane.com/waterproof-membrane-switch-harsh-environment-design/)
+- **Actuator size/shape is free**: because each "button" is just
+  printed artwork plus a dome underneath, the 7–10mm glove-friendly
+  target from §5 is trivial to hit exactly (or any shape/spacing) —
+  and the graphic layer can print icons/labels directly on each button
+  (camera on/off, left/right arrows, lap) instead of relying on
+  discrete colored caps.
+
+**The catch: sourcing is a real trade-off, not a free upgrade.**
+
+1. **A genuinely off-the-shelf, catalog-stocked option exists**: **NKK
+   Switches' `FM` series**, e.g. part `FMBN04BE` — a **4-key**
+   non-illuminated membrane keypad, snap-dome tactile feedback,
+   adhesive-backed for panel mounting, 1,000,000+ cycle life, stocked
+   at DigiKey/Mouser/RS/Farnell (not a custom order). This is the
+   closest thing to "buy a membrane keypad the same way you'd buy a
+   switch."
+   [DigiKey: FM series membrane keypads](https://www.digikey.com/en/product-highlight/n/nkk-switches/fm-series-of-membrane-switch-keypads) ·
+   [DigiKey: FMBN04BE](https://www.digikey.com/en/products/detail/nkk-switches/FMBN04BE/360-2295-ND/1830605) ·
+   [NKK FM series datasheet (Mouser-hosted PDF)](http://www.mouser.com/pdfdocs/NKK_FM_Series_Membrane_Keypads.pdf)
+   - **Only comes in 4-key or 16-key layouts** — no 5-key option. A
+     4-key FM keypad is a clean fit *if* the project settles on 4
+     buttons (i.e. the still-open "camera ON/OFF as one toggle button"
+     question in the specs doc resolves that way); if 5 buttons are
+     kept, this specific catalog part doesn't fit and the choice falls
+     back to option 2 below.
+   - **Listed as "Matrix Output"** despite only 5 pins for 4 keys —
+     **not yet confirmed** whether that's a true scanned row/column
+     matrix (which would conflict with the specs doc's firmware
+     architecture: "5 touch buttons, individual GPIOs, no matrix,"
+     wake via GPIO PORT event) or effectively "4 individual switches +
+     1 shared common," which would be a drop-in fit for the existing
+     GPIO/pull-up design. **Must check the actual pinout in NKK's
+     datasheet before adopting this part** — this is the single
+     biggest open question standing between this option and a firm
+     recommendation.
+   - **Termination is a cable with connector**, not bare solder pads —
+     so unlike a discrete through-hole switch, this needs a mating
+     connector footprint on the PCB (a small added BOM line), not a
+     direct hand-solder joint. Still compact and still avoids SMD
+     switch parts, just a different kind of PCB interface than §5's
+     switches.
+   - **Operating temperature -15°C to +50°C** (per search results,
+     unconfirmed against the full datasheet) — worth double-checking
+     against realistic cold-weather riding conditions as part of
+     verifying this part.
+2. **A fully custom membrane keypad**, made to this project's exact
+   4-or-5-button layout/graphics by a specialty manufacturer (e.g.
+   RSP, LID/tactilemembrane, Kingway USA, JRPanel, ALLPCB) — the "real"
+   ZX81-style approach: any button count, shape, icon set, and IP
+   rating, and cheap per unit at volume. But it is genuinely a
+   **custom-manufactured part, not a catalog purchase**: typical MOQ
+   for a standard custom design is **~50 units** (some vendors offer
+   5–10-piece prototype/first-article runs), with **2–8 week**
+   production lead time (a few vendors advertise 24–48h turnarounds
+   specifically for early prototypes), plus one-time artwork/tooling
+   setup. That's a real mismatch for "build one or two units to test,"
+   though very attractive once the design is stable and a small
+   production batch is being planned.
+   [JRPanel: membrane switch prototype quoting](https://www.jrpanel.com/switch/buy/) ·
+   [RSP: custom membrane switch manufacturing](https://www.rspinc.com/capabilities/membrane-switches/) ·
+   [LID/tactilemembrane: custom membrane switches, 2-week prototype](https://tactilemembrane.com/custom-membrane-switches-and-keypads-precision-durability-fast-turnaround/)
+
+**Recommendation**: keep §5's `Multimec 5G` (through-hole switch +
+cap) as the pick for the **first prototype board** — it's a
+buy-today, solder-today catalog part with no MOQ/lead-time risk, even
+though it costs ~12mm of stack height. Treat the membrane keypad as
+the **strong follow-up option once the design stabilizes**:
+- If the button count settles at exactly 4, revisit the NKK `FM`
+  series (`FMBN04BE`) as a possible catalog drop-in — pending the
+  matrix-output pinout check above.
+- If a small production run (tens to low hundreds of units) is ever
+  planned, a fully custom membrane keypad is likely the better
+  long-term choice on compactness, sealing, and per-unit cost alike —
+  revisit once the enclosure and final button layout are locked.
+
+**Open points**:
+- Confirm `FMBN04BE`'s actual pinout (true matrix vs. common+4) against
+  NKK's full datasheet before treating it as firmware-compatible.
+- Resolve the 4-vs-5-button question (specs doc open point) — it
+  gates whether the off-the-shelf NKK 4-key part is even usable.
+- If pursuing a custom membrane keypad later, get concrete MOQ/lead
+  time/price quotes from 2–3 of the vendors above once the layout is
+  final.
+
+---
+
+## 7. Temperature sensor — does idle operation make it read true ambient?
+
+**Question**: since the device is idle most of the time, and the
+nRF52832/nRF52840 both have a built-in die-temperature sensor, should
+that reading effectively track outside/ambient temperature?
+
+**Partial confirmation — idle operation solves the *electronic*
+self-heating problem, but that's not the only error source.**
+
+- **What idle operation actually fixes**: yes, being idle almost all
+  the time removes the dominant *electronic* self-heating concern.
+  Nordic's own DevZone guidance on this exact question notes the
+  nRF52832 is "an ultra low power device and produces very little
+  heat, so the die temperature is approximately the same as the
+  ambient temperature," citing a measured **~2°C rise on the older
+  nRF51 under close-to-full activity**, with the nRF52 expected to run
+  cooler still for the same workload thanks to its better power
+  efficiency. This project's duty cycle — brief BLE/ANT+ bursts on a
+  button press, then long idle stretches, with temperature sampling
+  only every 5 minutes during an already-bounded broadcast session
+  (see specs doc "Thermometer") — is far below "close to full
+  activity," so self-heating from the radio/CPU itself should be a
+  minor contributor, consistent with what the specs doc already
+  states.
+  [Nordic DevZone: nRF52832 temperature sensor accuracy](https://devzone.nordicsemi.com/f/nordic-q-a/21755/nrf52832-temperature-sensor-accuracy)
+- **Minor discrepancy to resolve**: that DevZone thread cites **±5°C**
+  stock accuracy, while the existing specs doc's "Internal temperature
+  sensor" section cites **±4°C** "per Nordic's datasheet" — worth
+  reconciling against the actual nRF52832 datasheet's `TEMP` electrical
+  characteristics table (the two figures may reflect different
+  conditions, e.g. calibrated vs. raw, or a different temperature
+  range) before quoting a single number with confidence.
+- **What idle operation does *not* fix: the sensor still reads the
+  chip/PCB/enclosure temperature, not free air — and this is where
+  most of the real-world error comes from in comparable devices.**
+  This is a well-documented issue on Garmin Edge and Wahoo ELEMNT units
+  (both of which read temperature the same architectural way: an
+  internal sensor on the board, not an external probe), independent of
+  how "busy" the unit's electronics are:
+  - Garmin Edge forum reports describe units in direct sun reading
+    **5–10°F (~3–6°C) higher** than an identical unit in the shade,
+    and up to **10–15°F (~5.5–8°C) higher** in full sun with low wind.
+  - Wahoo's own support documentation states the temperature sensor
+    "is placed where it best reads the temperature of the internal
+    electronics, rather than the ambient external air temperature,"
+    and that Wahoo considers **±10°F (~5.5°C)** to be within spec —
+    and explicitly calls out direct sunlight, holding the unit in hand,
+    or charging from an external battery as things that push the
+    reading above true ambient.
+  - Both sources agree the reading is "mostly accurate... at high
+    airspeed and under overcast conditions" — i.e. exactly the
+    opposite of a stationary, sunny handlebar mount.
+  - **Directly answering "so shade would be fine?"**: yes — the same
+    reports describe both Garmin and Wahoo units as accurate to
+    **within ~1°F (~0.5°C) in the shade**, vs. the 5–15°F (~3–8°C)
+    over-read cited above once the unit sits in direct sun. Shade
+    removes essentially all of the *dominant* error source for this
+    class of device; what's left is closer to the sensor's own stock
+    tolerance (±4–5°C, still unresolved above) rather than the much
+    larger solar-gain effect.
+  [Wahoo: Data Accuracy — temperature sensor placement and tolerance](https://support.wahoofitness.com/hc/en-us/articles/20547628744210-Data-Accuracy-ELEMNT) ·
+  [Garmin Forums: Edge 1030 Plus temperature reading discussion](https://forums.garmin.com/sports-fitness/cycling/f/edge-1030-plus/289861/temperature-reading-edge-1030-plus) ·
+  [Bike Forums: the Garmin Edge thermometer](https://www.bikeforums.net/road-cycling/791570-garmin-edge-thermometer.html)
+
+**Net answer**: idle operation is genuinely the right reasoning for
+*why self-heating from the chip itself won't be a big factor* here —
+that part is confirmed, and it's a meaningfully stronger position than
+"any die-temperature sensor is unreliable," since this project's duty
+cycle is much lighter than the "close to full activity" case Nordic
+measured ~2°C for. But it doesn't make the reading equivalent to true
+outside air temperature: the sensor still measures a small
+sun-exposed plastic enclosure sitting still on a handlebar, and that
+enclosure's own thermal behavior (solar gain, low airflow when
+stationary, proximity to a warm hand/body) is — per real-world data
+from architecturally identical commercial devices — good for several
+°C of error on its own, on top of the sensor's own ±4–5°C stock
+tolerance. This matches, and now quantifies with real precedent, the
+specs doc's existing framing: **fine for an indicative "feels like"
+reading on the Edge, not for precision measurement** — no change to
+that conclusion, just firmer evidence behind it.
+
+**Open points**:
+- Reconcile the ±4°C vs. ±5°C accuracy figures against the nRF52832
+  datasheet directly.
+- Check `ant_garmin.c`'s actual session timing: is the *first*
+  temperature sample of a session taken immediately when the
+  triggering button press starts the session, or only after the first
+  full `TEMP_BROADCAST_INTERVAL_MIN` has elapsed? The former would sit
+  closer in time to that button's own BLE/ANT+ activity (a much
+  smaller effect than the enclosure/solar one above, but easy to avoid
+  if it's cheap to delay the first sample slightly).
+- Once real hardware exists, field-test the "feels like" framing
+  directly: compare the device's reading against a known-good ambient
+  reference in both shaded and direct-sun handlebar mounting, similar
+  to the Garmin/Wahoo reports cited above.
+
+---
+
+## 8. Open points (hardware)
 
 - **P-MOSFET reverse-polarity stage** (§3) — part selection (Vgs(th),
   Rds(on) at the CR2032's low current levels, package size) not yet
@@ -359,10 +568,13 @@ constraint set.
 - **SWD header (`J1`) wiring convention** — make sure schematic/BOM
   notes explicitly document "sense-only, board stays coin-cell-powered
   during programming" (§2) so it isn't miswired as a power line later.
-- **Button hardware** (§5) — `Multimec 5G` + cap part numbers
-  (`1ES` vs. the 12mm polyamide round cap) to lock down, ~12.5mm
-  switch+cap stack height to fold into the enclosure design, final
-  button count — all pending the enclosure design and a first
-  prototype board.
+- **Button hardware** (§5–§6) — decide between the `Multimec 5G`
+  through-hole switch+cap (buildable now, ~12.5mm stack) and a
+  membrane keypad (far thinner, but either fixed at 4 keys off-the-shelf
+  pending a pinout check, or custom-manufactured with MOQ/lead-time
+  implications) — final button count, and this choice, both still open.
+- **Temperature sensor accuracy figure** (§7) — reconcile ±4°C vs.
+  ±5°C against the nRF52832 datasheet, and confirm the first-sample
+  timing in `ant_garmin.c` relative to the triggering button press.
 - Everything else affecting the PCB (enclosure, mounting, sealing) is
   still tracked in `gopro_garmin_remote_specs.md` §4 ("Open points").
