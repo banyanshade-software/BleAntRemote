@@ -9,7 +9,9 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include <ant_interface.h>
+#if 0
+
+#include <<ant_interface.h>>
 
 LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_DBG);
 
@@ -42,7 +44,7 @@ LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_DBG);
  *     top-level manifest - confirmed, not just documented for a "fresh
  *     workspace" - rather than adding it to this project's existing
  *     manifest).
- *   - doc/kconfig/*.html confirmed CONFIG_ANT, CONFIG_ANT_LIBRARY_CORE,
+ *   - doc/kconfig/ *.html confirmed CONFIG_ANT, CONFIG_ANT_LIBRARY_CORE,
  *     CONFIG_ANT_CHANNEL_CONFIG, CONFIG_ANT_KEY_MANAGER,
  *     CONFIG_ANT_EVALUATION_KEY/CONFIG_ANT_LICENSE_KEY (see prj.conf) all
  *     exist as described, and that no CONFIG_ANT_ENVIRONMENT or
@@ -388,3 +390,9 @@ void ant_garmin_note_activity(void)
 	k_timer_start(&temp_session_timer,
 		      K_MINUTES(TEMP_SESSION_DURATION_MIN), K_NO_WAIT);
 }
+#else
+void ant_garmin_init(void) 
+{
+
+}
+#endif
