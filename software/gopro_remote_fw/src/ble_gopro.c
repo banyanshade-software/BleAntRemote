@@ -354,9 +354,9 @@ static void remote_info_available(struct bt_conn *conn,
 
 	LOG_HEXDUMP_INF(feat, 8, "GoPro LE feature set:");
 	LOG_INF("GoPro features: enc=%d dle=%d 2M_phy=%d coded_phy=%d privacy=%d",
-		BT_FEAT_LE_ENCR(feat), BT_FEAT_LE_DLE(feat),
-		BT_FEAT_LE_PHY_2M(feat), BT_FEAT_LE_PHY_CODED(feat),
-		BT_FEAT_LE_PRIVACY(feat));
+		(int) BT_FEAT_LE_ENCR(feat), (int)BT_FEAT_LE_DLE(feat),
+		(int)BT_FEAT_LE_PHY_2M(feat), (int)BT_FEAT_LE_PHY_CODED(feat),
+		(int)BT_FEAT_LE_PRIVACY(feat));
 }
 
 static void security_changed(struct bt_conn *conn, bt_security_t level,
