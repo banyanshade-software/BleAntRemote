@@ -11,7 +11,7 @@
 
 #if 0
 
-#include <<ant_interface.h>>
+#include <ant_interface.h>
 
 LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_DBG);
 

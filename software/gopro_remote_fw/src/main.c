@@ -67,6 +67,8 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/watchdog.h>
+#include <zephyr/drivers/hwinfo.h>
 #include <zephyr/logging/log.h>
 
 #include "ble_gopro.h"
@@ -249,6 +251,114 @@ enum rec_state {
 	REC_OFF_SENT,
 };
 
+/* from blinky */
+
+
+/* 1000 msec = 1 sec */
+#define SLEEP_TIME_MS   1000
+
+/* The devicetree node identifier for the "led0" alias. */
+#define LED0_NODE DT_ALIAS(led0)
+
+/*
+ * A build error on this line means your board is unsupported.
+ * See the sample documentation for information on how to fix this.
+ */
+static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
+
+/* Hardware watchdog: an independent peripheral that keeps counting
+ * down even if the CPU truly locks up (fault-in-fault, IRQs wedged
+ * off, etc.) - the one thing that can still recover us and tell us
+ * something when even the fatal-error handler can't print anything.
+ * Armed with a long window, then deliberately NOT fed across the
+ * ble_gopro_init()/bt_enable() call: if that call locks up, the
+ * watchdog fires on its own a few seconds later and resets the chip. */
+static const struct device *const wdt = DEVICE_DT_GET(DT_ALIAS(watchdog0));
+static int wdt_channel_id = -1;
+
+static void log_reset_cause(void)
+{
+	uint32_t cause = 0;
+
+	if (hwinfo_get_reset_cause(&cause) == 0) {
+		LOG_INF("Reset cause: 0x%08x%s", cause,
+			(cause & RESET_WATCHDOG) ? " <-- WATCHDOG: previous boot locked up here!" : "");
+		hwinfo_clear_reset_cause();
+	} else {
+		LOG_WRN("hwinfo_get_reset_cause() failed");
+	}
+}
+
+static void watchdog_arm(void)
+{
+	if (!device_is_ready(wdt)) {
+		LOG_WRN("Watchdog device not ready - no lockup recovery this run");
+		return;
+	}
+
+	struct wdt_timeout_cfg wdt_cfg = {
+		.window.min = 0,
+		.window.max = 5000, /* must be fed at least every 5s */
+		.callback = NULL,
+		.flags = WDT_FLAG_RESET_SOC,
+	};
+
+	wdt_channel_id = wdt_install_timeout(wdt, &wdt_cfg);
+	if (wdt_channel_id < 0) {
+		LOG_ERR("wdt_install_timeout() failed (%d)", wdt_channel_id);
+		return;
+	}
+	if (wdt_setup(wdt, 0) != 0) {
+		LOG_ERR("wdt_setup() failed");
+		wdt_channel_id = -1;
+	}
+}
+
+static void watchdog_feed(void)
+{
+	if (wdt_channel_id >= 0) {
+		wdt_feed(wdt, wdt_channel_id);
+	}
+}
+
+/* Heartbeat: fast LED toggle while a blocking init call (e.g.
+ * ble_gopro_init()/bt_enable()) is in progress. No debugger/console
+ * available on the bare dongle, so this is how we tell "it's still
+ * alive and hasn't returned yet" from "it froze/hard-faulted right
+ * here": if this stops toggling and NEVER resumes (no fatal() blink
+ * pattern ever starts either), the crash happened inside that call. */
+static void heartbeat_handler(struct k_timer *timer)
+{
+	gpio_pin_toggle_dt(&led);
+}
+K_TIMER_DEFINE(heartbeat_timer, heartbeat_handler, NULL);
+
+/* Halts and blinks the LED abs(code) times (capped), pausing between
+ * repeats, so the code can be read off by counting blinks - no
+ * debugger/console needed. Distinguishable from the heartbeat above
+ * because of the long pause between bursts. */
+static void fatal(int code)
+{
+	LOG_ERR("Fatal error %d - halting", code);
+
+	int blinks = code < 0 ? -code : code;
+	if (blinks == 0) {
+		blinks = 1;
+	}
+	if (blinks > 20) {
+		blinks = 20;
+	}
+
+	while (1) {
+		for (int i = 0; i < blinks; i++) {
+			gpio_pin_set_dt(&led, 1);
+			k_msleep(200);
+			gpio_pin_set_dt(&led, 0);
+			k_msleep(200);
+		}
+		k_msleep(1500);
+	}
+}
 /* -------------------------------------------------------------------
  * main - button/action finite-state machine
  * ------------------------------------------------------------------- */
@@ -256,17 +366,57 @@ int main(void)
 {
 	int err;
 
+	log_reset_cause();
+
 	LOG_INF("=== GoPro Remote (nRF52840 Dongle) - starting ===");
+
+	if (!gpio_is_ready_dt(&led)) {
+		LOG_ERR("LED GPIO not ready");
+		fatal(1);
+	}
+	err = gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
+	if (err < 0) {
+		LOG_ERR("LED GPIO configuration failed (%d)", err);
+		fatal(2);
+	}
+
+	if ((1)) watchdog_arm();
+
+	/* LED toggles here independently of LOG_INF, so it keeps proving
+	 * the CPU is alive even if the console/USB link itself stalls
+	 * (e.g. CDC ACM backpressure) and stops printing. */
+	const int startup_blink_count = 10;	
+	for (int i=0; i<startup_blink_count; i++) {
+		watchdog_feed();
+		gpio_pin_toggle_dt(&led);
+		LOG_INF("=== GoPro Remote (nRF52840 Dongle) - starting (%d/%d) ===", i, startup_blink_count);
+		k_msleep(1000);
+	}
+
+
+	
+	LOG_INF("=== config BLE---->");
+	LOG_INF("=== config BLE---->");
+	LOG_INF("=== config BLE---->");
+
+	watchdog_feed(); /* last feed before the risky call - deliberately
+			   * not fed again until it returns, so a lockup in
+			   * here forces a watchdog reset within ~5s. */
+	k_timer_start(&heartbeat_timer, K_MSEC(150), K_MSEC(150));
+	err = ble_gopro_init();
+	k_timer_stop(&heartbeat_timer);
+	watchdog_feed();
+
+	if (err) {
+		LOG_ERR("ble_gopro_init() failed (%d)", err);
+		fatal(err);
+	}
+	fatal(420);
 
 	err = setup_buttons();
 	if (err) {
 		LOG_ERR("Aborting: buttons not functional");
-	}
-
-	err = ble_gopro_init();
-	if (err) {
-		LOG_ERR("ble_gopro_init() failed (%d)", err);
-		return 0;
+		fatal(3);
 	}
 
 	ant_garmin_init();
@@ -289,6 +439,8 @@ int main(void)
 	 * manages its own connection/reconnection state internally. */
 	struct remote_msg msg;
 	while (1) {
+		gpio_pin_toggle_dt(&led);
+
 		k_msgq_get(&action_msgq, &msg, K_FOREVER);
 
 		enum rmt_event action = msg.action;

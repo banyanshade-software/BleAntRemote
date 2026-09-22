@@ -518,11 +518,13 @@ static void log_bond(const struct bt_bond_info *info, void *user_data)
 int ble_gopro_init(void)
 {
 	LOG_INF("Initializing BLE stack...");
+
 	int err = bt_enable(NULL);
 	if (err) {
 		LOG_ERR("bt_enable() failed (%d)", err);
 		return err;
 	}
+	return 421;
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
 		int settings_err = settings_load(); /* reload saved bonding keys */
