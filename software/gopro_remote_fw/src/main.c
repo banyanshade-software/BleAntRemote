@@ -70,6 +70,7 @@
 #include <zephyr/drivers/watchdog.h>
 #include <zephyr/drivers/hwinfo.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/settings/settings.h>
 
 #include "ble_gopro.h"
 #include "ant_garmin.h"
@@ -351,6 +352,9 @@ static void fatal(int code)
 
 	while (1) {
 		for (int i = 0; i < blinks; i++) {
+			watchdog_feed(); /* fatal() is a deliberate halt, not a
+					   * real lockup - don't let the watchdog
+					   * reset us out of it. */
 			gpio_pin_set_dt(&led, 1);
 			k_msleep(200);
 			gpio_pin_set_dt(&led, 0);
@@ -380,25 +384,30 @@ int main(void)
 		fatal(2);
 	}
 
-	if ((1)) watchdog_arm();
+	if ((0)) watchdog_arm();
 
 	/* LED toggles here independently of LOG_INF, so it keeps proving
 	 * the CPU is alive even if the console/USB link itself stalls
 	 * (e.g. CDC ACM backpressure) and stops printing. */
-	const int startup_blink_count = 10;	
+	const int startup_blink_count = 5;	
 	for (int i=0; i<startup_blink_count; i++) {
 		watchdog_feed();
 		gpio_pin_toggle_dt(&led);
-		LOG_INF("=== GoPro Remote (nRF52840 Dongle) - starting (%d/%d) ===", i, startup_blink_count);
+		LOG_INF("=== GoPro Remote (nRF52840 Dongle) - starting (%d/%d) ***", i, startup_blink_count);
 		k_msleep(1000);
 	}
 
 
 	
 	LOG_INF("=== config BLE---->");
-	LOG_INF("=== config BLE---->");
-	LOG_INF("=== config BLE---->");
 
+/*
+	err = settings_subsys_init();
+	if (err) {
+		LOG_ERR("settings_subsys_init() failed (%d)", err);
+		fatal(err);
+	}
+*/	
 	watchdog_feed(); /* last feed before the risky call - deliberately
 			   * not fed again until it returns, so a lockup in
 			   * here forces a watchdog reset within ~5s. */
