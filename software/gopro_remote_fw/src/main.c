@@ -389,13 +389,14 @@ int main(void)
 	/* LED toggles here independently of LOG_INF, so it keeps proving
 	 * the CPU is alive even if the console/USB link itself stalls
 	 * (e.g. CDC ACM backpressure) and stops printing. */
-	const int startup_blink_count = 5;	
+	const int startup_blink_count = 2;	
 	for (int i=0; i<startup_blink_count; i++) {
 		watchdog_feed();
 		gpio_pin_toggle_dt(&led);
 		LOG_INF("=== GoPro Remote (nRF52840 Dongle) - starting (%d/%d) ***", i, startup_blink_count);
 		k_msleep(1000);
 	}
+	LOG_INF("compile date: %s", __DATE__);
 
 
 	
@@ -413,6 +414,8 @@ int main(void)
 			   * here forces a watchdog reset within ~5s. */
 	k_timer_start(&heartbeat_timer, K_MSEC(150), K_MSEC(150));
 	err = ble_gopro_init();
+	LOG_INF("=== config BLE done, err=%d", err);
+
 	k_timer_stop(&heartbeat_timer);
 	watchdog_feed();
 
@@ -420,20 +423,24 @@ int main(void)
 		LOG_ERR("ble_gopro_init() failed (%d)", err);
 		fatal(err);
 	}
-	fatal(420);
+	//fatal(420);
 
 	err = setup_buttons();
 	if (err) {
 		LOG_ERR("Aborting: buttons not functional");
 		fatal(3);
 	}
-
+	LOG_INF("**** ANT init");
 	ant_garmin_init();
+
+	LOG_INF("**** temp_sensor init");
 
 	err = temp_sensor_init();
 	if (err) {
 		LOG_WRN("Internal temperature sensor unavailable (%d)", err);
 	}
+	LOG_INF("**** ANT init done");
+
 
 	ble_gopro_set_status_cb(on_gopro_status);
 	//k_timer_init(&status_timer, status_timer_handler, NULL);

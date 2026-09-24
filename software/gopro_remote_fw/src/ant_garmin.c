@@ -9,7 +9,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#if 0
+#if 1
 
 #include <ant_interface.h>
 
@@ -81,7 +81,7 @@ LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_DBG);
  * Temperature broadcast session parameters - example defaults from the
  * product requirement, tune once real ANT+/battery testing is possible.
  */
-#define TEMP_BROADCAST_INTERVAL_MIN 5
+#define TEMP_BROADCAST_INTERVAL_MIN 1 // in minutes 
 #define TEMP_SESSION_DURATION_MIN   30
 
 /* ---------------------------------------------------------------------
@@ -96,7 +96,10 @@ LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_DBG);
  * untracked file and declare it `extern` here instead. */
 #define ANT_PLUS_NETWORK_NUMBER 0
 static const uint8_t ant_plus_network_key[8] = {
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	// found in several public ANT+ references, but not confirmed against the
+	// official gated profile doc (see status comment at the top of this file)
+	0xB9, 0xA5, 0x21, 0xFB, 0xBD, 0x72, 0xC3, 0x45,
+	//0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
 #define ANT_TEMP_CHANNEL_NUMBER 0
@@ -200,7 +203,7 @@ static void ant_garmin_send_temperature(int16_t temp_centi)
 static void temp_broadcast_work_handler(struct k_work *work)
 {
 	int16_t temp_centi;
-
+	LOG_INF("Temperature broadcast work handler");
 	if (!temp_sensor_read(&temp_centi)) {
 		LOG_WRN("Temperature read failed, skipping this broadcast");
 		return;
@@ -212,6 +215,7 @@ K_WORK_DEFINE(temp_broadcast_work, temp_broadcast_work_handler);
 
 static void temp_broadcast_timer_expiry(struct k_timer *timer)
 {
+	LOG_INF("Temperature broadcast timer expired, submitting work");
 	k_work_submit(&temp_broadcast_work);
 }
 
@@ -260,6 +264,12 @@ static void ant_event_thread_fn(void *p1, void *p2, void *p3)
 	uint8_t event;
 	uint8_t evt_buffer[ANT_TEMP_PAGE_SIZE];
 
+	LOG_DBG("----- ANT+ event thread started");
+	k_timer_start(&temp_broadcast_timer,
+		      K_MINUTES(TEMP_BROADCAST_INTERVAL_MIN),
+		      K_MINUTES(TEMP_BROADCAST_INTERVAL_MIN));
+	LOG_DBG("----- ANT+ broadcast timer started (%d min interval)",
+		TEMP_BROADCAST_INTERVAL_MIN);
 	while (1) {
 		int err = ant_event_get(&channel, &event, evt_buffer);
 
@@ -293,6 +303,7 @@ void ant_garmin_init(void)
 {
 	int err;
 
+	LOG_INF("+++ ant_garmin_init");
 	/* ant_stack_init() is NOT called here - it's an internal glue
 	 * function that sdk-ant's own SYS_INIT hook already calls
 	 * automatically at boot, using the CONFIG_ANT_LICENSE_KEY /
@@ -362,6 +373,7 @@ void ant_garmin_init(void)
 	LOG_INF("ANT+ stack initialized, temperature channel open "
 		"(channel %d, device type %d)",
 		ANT_TEMP_CHANNEL_NUMBER, ANT_ENVIRONMENT_DEVICE_TYPE);
+
 }
 
 void ant_garmin_handle_button(const char *which)

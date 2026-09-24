@@ -23,6 +23,7 @@ static const struct device *const temp_dev =
 
 int temp_sensor_init(void)
 {
+	LOG_INF("Initializing internal temperature sensor...");
 	if (temp_dev == NULL || !device_is_ready(temp_dev)) {
 		LOG_ERR("Internal temperature sensor device not ready");
 		return -ENODEV;

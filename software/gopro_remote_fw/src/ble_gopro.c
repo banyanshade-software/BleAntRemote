@@ -524,7 +524,7 @@ int ble_gopro_init(void)
 		LOG_ERR("bt_enable() failed (%d)", err);
 		return err;
 	}
-	return 421;
+	//return 421;
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
 		int settings_err = settings_load(); /* reload saved bonding keys */
