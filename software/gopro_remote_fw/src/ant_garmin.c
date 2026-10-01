@@ -103,18 +103,20 @@ static const uint8_t ant_plus_network_key[8] = {
 };
 
 #define ANT_TEMP_CHANNEL_NUMBER 0
+//#define ANT_TEMP_CHANNEL_NUMBER 10 // remote
 
 /* ANT+ Environment sensor device type. Commonly cited as 25 in
  * third-party ANT+ references - NOT independently verified against the
  * official gated device profile document (see status comment above). */
-#define ANT_ENVIRONMENT_DEVICE_TYPE 25
+//#define ANT_ENVIRONMENT_DEVICE_TYPE 25
+#define ANT_ENVIRONMENT_DEVICE_TYPE 114 //remote
 
 /* Placeholder device number (this device's ANT+ "serial number" on the
  * channel) - any value is fine for evaluation/bring-up, but should
  * probably be derived from the chip's unique ID for a real product so
  * multiple units don't collide. Unverified against the real profile
  * doc either way. */
-#define ANT_TEMP_DEVICE_NUMBER 1
+#define ANT_TEMP_DEVICE_NUMBER 0x1234
 
 /* Placeholder transmission type (shared-channel / global-data-pages
  * flags per the ANT+ spec) - 1 is a common "plain, independent channel"
@@ -155,22 +157,96 @@ static bool ant_stack_ready;
  * other bytes mean) needs checking against the real ANT+ Environment
  * device profile document.
  */
+typedef struct {
+    uint8_t  page_number;       // Toujours 0x01
+    uint8_t  event_count;       // Compteur d'événements (0-255)
+    uint8_t  low_temp_lsb;      // Bits 0-7 de la température minimale
+    uint8_t  low_high_temp_nib; // Bits 8-11 (Min) et Bits 0-3 (Max)
+    uint8_t  high_temp_msb;     // Bits 4-11 de la température maximale
+    uint8_t  current_temp_lsb;  // Bit de poids faible (Température actuelle)
+    uint8_t  current_temp_msb;  // Bit de poids fort (Température actuelle)
+    uint8_t  reserved;          // Toujours 0xFF
+} __attribute__((packed)) ant_env_page1_t;
+
 static void ant_garmin_build_temperature_page(uint8_t page[ANT_TEMP_PAGE_SIZE],
 					       int16_t temp_centi)
 {
-	memset(page, 0xFF, ANT_TEMP_PAGE_SIZE);
+	 ant_env_page1_t pt;
+    
+    // 1. Identifiant de la page
+    pt.page_number = 0x01;
+    
+    // 2. Compteur d'événements de mesure
+	static int measurement_count = 0;
+	measurement_count = (measurement_count + 1) % 256; 
+    pt.event_count = measurement_count;
 
-	page[0] = 0x00; /* page number - PLACEHOLDER, unverified */
+    // 3. Encodage des Min/Max 24h (Échelle: 0.1°C, Offset: -204.8°C, codé sur 12 bits)
+    // Formule ANT+ officielle : Valeur_Brute = (Celsius + 204.8) * 10
+    uint16_t low_encoded  = (uint16_t)((temp_centi  + 204.8f) * 10.0f);
+    uint16_t high_encoded = (uint16_t)((temp_centi + 204.8f) * 10.0f);
 
-	/* Temperature, signed 16-bit, 0.01 degC resolution, little-endian
-	 * - PLACEHOLDER byte offset (bytes 6-7 chosen only because they're
-	 * the last two bytes of the page; not sourced from the real
-	 * profile doc). */
-	page[6] = (uint8_t)(temp_centi & 0xFF);
-	page[7] = (uint8_t)((temp_centi >> 8) & 0xFF);
+    // Extraction et découpage des 12 bits pour le stockage partagé
+    pt.low_temp_lsb      = (uint8_t)(low_encoded & 0xFF); 
+    pt.low_high_temp_nib = (uint8_t)(((low_encoded >> 8) & 0x0F) | ((high_encoded & 0x0F) << 4));
+    pt.high_temp_msb     = (uint8_t)((high_encoded >> 4) & 0xFF);
+
+    // 4. Encodage de la température actuelle (Échelle: 0.01°C, Signée sur 16 bits / Complément à 2)
+    //int16_t current_encoded = (int16_t)(temp_centi * 100.0f);
+    pt.current_temp_lsb   = (uint8_t)(temp_centi & 0xFF);
+    pt.current_temp_msb   = (uint8_t)((temp_centi >> 8) & 0xFF);
+
+    // 5. Octet de réserve obligatoire
+    pt.reserved = 0xFF;
+
+    // Copie de la structure finale vers le buffer ANT de transmission
+    memcpy(page, &pt, sizeof(ant_env_page1_t));
+}
+
+typedef struct {
+    uint8_t page_number;      // 0x50
+    uint8_t reserved[2];      // 0xFF, 0xFF
+    uint8_t hw_version;       // Version matérielle (ex: 1)
+    uint16_t man_id;          // Identifiant Fabricant ANT+ (Little Endian)
+    uint16_t model_number;    // Numéro de modèle (Little Endian)
+} __attribute__((packed)) ant_common_page80_t;
+
+// Page 81 (0x51) : Informations Produit
+typedef struct {
+    uint8_t page_number;      // 0x51
+    uint8_t reserved[2];      // 0xFF, 0xFF
+    uint8_t sw_version;       // Version logicielle (ex: 1)
+    uint32_t serial_number;   // Numéro de série unique (Little Endian)
+} __attribute__((packed)) ant_common_page81_t;
+
+
+_Static_assert(sizeof(ant_common_page80_t) == ANT_STANDARD_DATA_PAYLOAD_SIZE, "Page 80 size mismatch");
+_Static_assert(sizeof(ant_common_page81_t) == ANT_STANDARD_DATA_PAYLOAD_SIZE, "Page 81 size mismatch");
+
+static void build_garmin_build_p80_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE])
+{
+	 ant_common_page80_t page80 = {
+            .page_number = 0x50,
+            .reserved = {0xFF, 0xFF},
+            .hw_version = 0x01,
+            .man_id = 0x00FF,       // Votre ID de membre ANT+ ou 0xFF (Development/Development)
+            .model_number = 0x0001
+        };
+        memcpy(page, &page80, ANT_STANDARD_DATA_PAYLOAD_SIZE);
+}
+static void build_garmin_build_p81_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE])
+{
+	  ant_common_page81_t page81 = {
+            .page_number = 0x51,
+            .reserved = {0xFF, 0xFF},
+            .sw_version = 0x01,
+            .serial_number = 987654321 // Votre numéro de série unique
+        };
+        memcpy(page, &page81, ANT_STANDARD_DATA_PAYLOAD_SIZE);
 }
 
 /* Actual ANT+ transmission of one reading. */
+
 static void ant_garmin_send_temperature(int16_t temp_centi)
 {
 	uint8_t page[ANT_TEMP_PAGE_SIZE];
@@ -181,7 +257,20 @@ static void ant_garmin_send_temperature(int16_t temp_centi)
 		return;
 	}
 
-	ant_garmin_build_temperature_page(page, temp_centi);
+	static int count = 0;
+	count++;
+	if (count % 10 == 1) {
+		LOG_DBG("Sending Garmin Page 80 ------------------------ =80=");
+		build_garmin_build_p80_page(page);
+	} else if (count % 10 == 2) {
+		LOG_DBG("Sending Garmin Page 81 ------------------------ =81=");
+		build_garmin_build_p81_page(page);
+
+	} else {
+		ant_garmin_build_temperature_page(page, temp_centi);
+	}
+	LOG_INF("ant_garmin_send_temperature() called %d times", count);
+
 
 	err = ant_broadcast_message_tx(ANT_TEMP_CHANNEL_NUMBER,
 					ANT_TEMP_PAGE_SIZE, page);
@@ -200,10 +289,12 @@ static void ant_garmin_send_temperature(int16_t temp_centi)
  * periodic timer below only submits this work item; the actual
  * sample+broadcast happens here, in the system workqueue thread.
  */
+
 static void temp_broadcast_work_handler(struct k_work *work)
 {
 	int16_t temp_centi;
 	LOG_INF("Temperature broadcast work handler");
+	
 	if (!temp_sensor_read(&temp_centi)) {
 		LOG_WRN("Temperature read failed, skipping this broadcast");
 		return;
@@ -266,8 +357,9 @@ static void ant_event_thread_fn(void *p1, void *p2, void *p3)
 
 	LOG_DBG("----- ANT+ event thread started");
 	k_timer_start(&temp_broadcast_timer,
-		      K_MINUTES(TEMP_BROADCAST_INTERVAL_MIN),
-		      K_MINUTES(TEMP_BROADCAST_INTERVAL_MIN));
+				K_SECONDS(5), K_SECONDS(5)); // for test
+		      //K_MINUTES(TEMP_BROADCAST_INTERVAL_MIN),
+		      //K_MINUTES(TEMP_BROADCAST_INTERVAL_MIN));
 	LOG_DBG("----- ANT+ broadcast timer started (%d min interval)",
 		TEMP_BROADCAST_INTERVAL_MIN);
 	while (1) {
