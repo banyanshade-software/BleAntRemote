@@ -11,10 +11,136 @@
 
 #if 1
 
-#include <ant_interface.h>
+
+#include <ant_parameters.h>
+#include <ant_state_indicator.h>
+#include <ant_key_manager/ant_key_manager.h>
+#include <ant_profiles/bsc/simulator/ant_bsc_simulator.h>
+
 
 LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_DBG);
 
+
+
+void ant_bsc_evt_handler(ant_bsc_profile_t *p_profile, ant_bsc_evt_t event);
+
+BSC_SENS_CHANNEL_CONFIG_DEF(bsc, CONFIG_BSC_TX_CHANNEL_NUM, CONFIG_BSC_TX_CHAN_ID_TRANS_TYPE,
+                            CONFIG_SENSOR_TYPE, CONFIG_BSC_TX_CHAN_ID_DEV_NUM,
+                            CONFIG_BSC_TX_NETWORK_NUM);
+BSC_SENS_PROFILE_CONFIG_DEF(bsc, true, true, ANT_BSC_PAGE_5, ant_bsc_evt_handler);
+
+
+static ant_bsc_profile_t bsc;
+static ant_bsc_simulator_t bsc_simulator;
+
+void ant_bsc_evt_handler(ant_bsc_profile_t *p_profile, ant_bsc_evt_t event) {
+  switch (event) {
+    case ANT_BSC_PAGE_0_UPDATED:
+      /* fall through */
+    case ANT_BSC_PAGE_1_UPDATED:
+      /* fall through */
+    case ANT_BSC_PAGE_2_UPDATED:
+      /* fall through */
+    case ANT_BSC_PAGE_3_UPDATED:
+      /* fall through */
+    case ANT_BSC_PAGE_4_UPDATED:
+      /* fall through */
+    case ANT_BSC_PAGE_5_UPDATED:
+      /* fall through */
+    case ANT_BSC_COMB_PAGE_0_UPDATED:
+      ant_bsc_simulator_one_iteration(&bsc_simulator);
+      break;
+    default:
+      break;
+  }
+}
+
+
+static void simulator_setup(void) {
+  const ant_bsc_simulator_cfg_t simulator_cfg = {
+      .p_profile = &bsc,
+      .device_type = CONFIG_SENSOR_TYPE,
+  };
+
+   ant_bsc_simulator_init(&bsc_simulator, &simulator_cfg, false);
+}
+
+static void ant_evt_handler(ant_evt_t *p_ant_evt) { ant_bsc_sens_evt_handler(p_ant_evt, &bsc); }
+
+
+static int profile_setup(void) {
+  int err = ant_bsc_sens_init(&bsc, BSC_SENS_CHANNEL_CONFIG(bsc), BSC_SENS_PROFILE_CONFIG(bsc));
+  if (err) {
+    LOG_ERR("ant_bsc_sens_init failed: %d", err);
+    return err;
+  }
+  bsc.BSC_PROFILE_manuf_id = CONFIG_BSC_TX_MFG_ID;
+  bsc.BSC_PROFILE_serial_num = CONFIG_BSC_TX_SERIAL_NUM;
+  bsc.BSC_PROFILE_hw_version = CONFIG_BSC_TX_HW_VERSION;
+  bsc.BSC_PROFILE_sw_version = CONFIG_BSC_TX_SW_VERSION;
+  bsc.BSC_PROFILE_model_num = CONFIG_BSC_TX_MODEL_NUM;
+
+  err = ant_bsc_sens_open(&bsc);
+  if (err) {
+    LOG_ERR("ant_bsc_sens_open failed: %d", err);
+    return err;
+  }
+
+  ant_state_indicator_channel_opened();
+  return err;
+}
+
+int ant_stack_setup(void) {
+  int err = ant_init();
+  if (err) {
+    LOG_ERR("ant_init failed: %d", err);
+    return err;
+  }
+  LOG_INF("ANT Version %s", ANT_VERSION_STRING);
+
+  err = ant_cb_register(&ant_evt_handler);
+  if (err) {
+    LOG_ERR("ant_cb_register failed: %d", err);
+    return err;
+  }
+
+  err = ant_plus_key_set(CONFIG_BSC_TX_NETWORK_NUM);
+  if (err) {
+    LOG_ERR("ant_plus_key_set failed: %d", err);
+  }
+  return err;
+}
+
+static int setup_all(void)
+{
+
+  int err = ant_stack_setup();
+  if (err) {
+    goto ERROR_EXIT;
+  }
+
+  err = utils_setup();
+  if (err) {
+    goto ERROR_EXIT;
+  }
+
+  simulator_setup();
+
+  err = profile_setup();
+  if (err) {
+    goto ERROR_EXIT;
+  }
+
+  k_timer_start(&timer, K_MSEC(TIMER_TICK_MS), K_MSEC(TIMER_TICK_MS));
+  return 0;
+ERROR_EXIT:
+  ant_state_indicator_fatal_error();
+  k_oops();
+
+  return 0;
+}
+
+#if 0
 /*
  * ============================================================================
  * Build/verification status (read this before touching channel constants)
@@ -103,13 +229,12 @@ static const uint8_t ant_plus_network_key[8] = {
 };
 
 #define ANT_TEMP_CHANNEL_NUMBER 0
-//#define ANT_TEMP_CHANNEL_NUMBER 10 // remote
 
 /* ANT+ Environment sensor device type. Commonly cited as 25 in
  * third-party ANT+ references - NOT independently verified against the
  * official gated device profile document (see status comment above). */
 //#define ANT_ENVIRONMENT_DEVICE_TYPE 25
-#define ANT_ENVIRONMENT_DEVICE_TYPE 114 //remote
+#define ANT_ENVIRONMENT_DEVICE_TYPE 16 //remote
 
 /* Placeholder device number (this device's ANT+ "serial number" on the
  * channel) - any value is fine for evaluation/bring-up, but should
@@ -121,7 +246,7 @@ static const uint8_t ant_plus_network_key[8] = {
 /* Placeholder transmission type (shared-channel / global-data-pages
  * flags per the ANT+ spec) - 1 is a common "plain, independent channel"
  * default seen in ANT+ sample code, not confirmed for this profile. */
-#define ANT_TEMP_TRANSMISSION_TYPE 1
+#define ANT_TEMP_TRANSMISSION_TYPE 0x05
 
 /* RF channel 57 -> 2400 MHz + 57 MHz = 2457 MHz. Fixed for all ANT+
  * devices (public, non-gated constant). */
@@ -495,8 +620,8 @@ void ant_garmin_note_activity(void)
 		      K_MINUTES(TEMP_SESSION_DURATION_MIN), K_NO_WAIT);
 }
 #else
-void ant_garmin_init(void) 
-{
+≈{
 
 }
+#endif
 #endif
