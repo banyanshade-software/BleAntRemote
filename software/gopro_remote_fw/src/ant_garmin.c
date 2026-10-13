@@ -679,10 +679,26 @@ void ant_garmin_note_activity(void) {
 /* Generic Command page we transmit to the master. */
 #define CTRL_PAGE_GENERIC_CMD  0x49
 
+/*
+ * Bring-up auto-test: there are no physical Garmin buttons wired to this
+ * module yet (main.c still has ant_garmin_handle_button() on a TODO), so
+ * nothing is ever transmitted to the Edge and the master never "sees" the
+ * remote. With REMOTE_AUTOTEST enabled we send a "page" Generic Command
+ * every REMOTE_AUTOTEST_PERIOD once paired, so we can confirm the Edge
+ * actually reacts. Set to 0 (or wire real buttons) for normal use.
+ */
+#define REMOTE_AUTOTEST         1
+#define REMOTE_AUTOTEST_PERIOD  K_SECONDS(3)
+
 /* Running sequence number for the Generic Command page (byte 5). */
 static uint8_t controls_cmd_sequence;
 /* Set once the master's availability page has been seen at least once. */
 static bool controls_master_seen;
+
+#if REMOTE_AUTOTEST
+static void controls_autotest_work_fn(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(controls_autotest_work, controls_autotest_work_fn);
+#endif
 
 /*
  * Build + send the ANT+ Controls Generic Command page (0x49 / 73) as an
@@ -715,6 +731,19 @@ static void controls_send_generic_command(uint16_t command) {
             command, (unsigned)(controls_cmd_sequence - 1));
   }
 }
+
+#if REMOTE_AUTOTEST
+static void controls_autotest_work_fn(struct k_work *work) {
+  ARG_UNUSED(work);
+  if (controls_master_seen) {
+    LOG_INF("autotest: sending 'page' command to the Edge");
+    controls_send_generic_command(CTRL_CMD_PAGE_SHORT);
+  } else {
+    LOG_DBG("autotest: not paired yet, waiting");
+  }
+  k_work_schedule(&controls_autotest_work, REMOTE_AUTOTEST_PERIOD);
+}
+#endif
 
 static void controls_handle_rx(const uint8_t *payload) {
   uint8_t page = payload[0];
@@ -826,6 +855,12 @@ static int controls_setup(void) {
   }
 
   ant_state_indicator_channel_opened();
+
+#if REMOTE_AUTOTEST
+  /* Start the bring-up auto-sender; it no-ops until we are paired. */
+  k_work_schedule(&controls_autotest_work, REMOTE_AUTOTEST_PERIOD);
+#endif
+
   return err;
 }
 
