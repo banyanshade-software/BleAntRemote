@@ -39,7 +39,7 @@
 #include <ant_state_indicator.h>
 #include <ant_key_manager.h>
 
-LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_DBG);
 
 /* ------------------------------------------------------------------------ */
 /* Profile selector                                                         */
@@ -47,7 +47,7 @@ LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_INF);
 #define ANT_GARMIN_PROFILE_BSC    0
 #define ANT_GARMIN_PROFILE_VIRB   1   /* ANT+ Controls master (current) */
 #define ANT_GARMIN_PROFILE_THERMO 2   /* ANT+ Environment temperature */
-#define ANT_GARMIN_PROFILE_REMOTE 3   /* Garmin remote - NOT IMPLEMENTED */
+#define ANT_GARMIN_PROFILE_REMOTE 3   /* Garmin Edge remote - Controls SLAVE */
 
 #ifndef ANT_GARMIN_PROFILE
 #define ANT_GARMIN_PROFILE ANT_GARMIN_PROFILE_THERMO // ANT_GARMIN_PROFILE_REMOTE //ANT_GARMIN_PROFILE_VIRB
@@ -639,11 +639,17 @@ void ant_garmin_note_activity(void) {
 /* ======================================================================== */
 #elif ANT_GARMIN_PROFILE == ANT_GARMIN_PROFILE_REMOTE
 /* ======================================================================== */
-/* The real Garmin Edge Remote behaviour (ANT+ Controls). STARTING POINT:   */
-/* this is a verbatim copy of the VIRB (Controls master) profile above, to  */
-/* be evolved into a proper remote using the ANT+ Controls device profile   */
-/* document (Generic Command page 0x49, etc.). Until then it behaves exactly */
-/* like VIRB.                                                                 */
+/* The real Garmin Edge Remote behaviour (ANT+ Controls device profile).    */
+/*                                                                           */
+/* Role split (ANT+ Controls profile): the *controllable* device (the Edge) */
+/* is the MASTER and broadcasts the Control Device Availability page (0x02); */
+/* the *control* device (this remote) is the SLAVE. We search for any Edge   */
+/* master (wildcard device number / transmission type), receive its 0x02     */
+/* page, and on a button press send the Generic Command page (0x49 = 73) as  */
+/* an *acknowledged* message, exactly like the OpenSourceEBike wireless      */
+/* remote (firmware/antplus_controls). The command number (bytes 6-7, LE)    */
+/* tells the Edge what to do: 0x0000 page (long), 0x0001 page (short),       */
+/* 0x0024 lap.                                                               */
 
 #include <ant_init.h>
 #include <ant_interface.h>
@@ -652,75 +658,91 @@ void ant_garmin_note_activity(void) {
 #define CONTROLS_CHANNEL_NUM   0
 #define CONTROLS_NETWORK_NUM   0
 #define CONTROLS_DEVICE_TYPE   16      /* ANT+ Controls */
-#define CONTROLS_DEV_NUM       38
-#define CONTROLS_TRANS_TYPE    5
+/* SLAVE search: wildcards so we pair with any Edge acting as master. */
+#define CONTROLS_DEV_NUM       0       /* wildcard: match any master */
+#define CONTROLS_TRANS_TYPE    0       /* wildcard */
 #define CONTROLS_RF_FREQ       57      /* 2457 MHz */
 #define CONTROLS_CHANNEL_PERIOD 8192   /* 4.06 Hz */
 
-#define CONTROLS_HW_VERSION    1
-#define CONTROLS_MFG_ID        0x00FF
-#define CONTROLS_MODEL_NUM     0x0001
-#define CONTROLS_SW_VERSION    1
-#define CONTROLS_SERIAL_NUM    0x3ADE68B1u
+/* Identity advertised in the Generic Command page 0x49 (slave serial /
+ * manufacturer id). Values mirror the OpenSourceEBike remote. */
+#define CONTROLS_SERIAL_NUM    0x0001
+#define CONTROLS_MFG_ID        0x000F
 
-static void build_common_page_80(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
-  page[0] = 0x50;
-  page[1] = 0xFF;
-  page[2] = 0xFF;
-  page[3] = CONTROLS_HW_VERSION;
-  page[4] = (uint8_t)(CONTROLS_MFG_ID & 0xFF);
-  page[5] = (uint8_t)((CONTROLS_MFG_ID >> 8) & 0xFF);
-  page[6] = (uint8_t)(CONTROLS_MODEL_NUM & 0xFF);
-  page[7] = (uint8_t)((CONTROLS_MODEL_NUM >> 8) & 0xFF);
-}
+/* ANT+ Controls "Generic Command Number" codes (page 0x49, bytes 6-7 LE). */
+#define CTRL_CMD_PAGE_LONG     0x0000u
+#define CTRL_CMD_PAGE_SHORT    0x0001u
+#define CTRL_CMD_LAP           0x0024u
 
-static void build_common_page_81(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
-  page[0] = 0x51;
-  page[1] = 0xFF;
-  page[2] = 0xFF;
-  page[3] = CONTROLS_SW_VERSION;
-  page[4] = (uint8_t)(CONTROLS_SERIAL_NUM & 0xFF);
-  page[5] = (uint8_t)((CONTROLS_SERIAL_NUM >> 8) & 0xFF);
-  page[6] = (uint8_t)((CONTROLS_SERIAL_NUM >> 16) & 0xFF);
-  page[7] = (uint8_t)((CONTROLS_SERIAL_NUM >> 24) & 0xFF);
-}
+/* Control Device Availability page received from the master (the Edge). */
+#define CTRL_PAGE_AVAILABILITY 0x02
+/* Generic Command page we transmit to the master. */
+#define CTRL_PAGE_GENERIC_CMD  0x49
 
-static void build_controls_availability_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
-  memset(page, 0x00, ANT_STANDARD_DATA_PAYLOAD_SIZE);
-  page[0] = 0x02; /* Control Device Availability */
-  page[7] = 0x18; /* capabilities: bit3 = KeypadControl (bisection: only byte7 changed) */
-  // FF => VIRB
-  // 7F idem
-  // 3F => VIRB
-  // 1F => not detected
-  // 0F => not detected 
-  // 30 => VIRB
-  // 10 => not detected
-  // 20 => VIRB
-}
+/* Running sequence number for the Generic Command page (byte 5). */
+static uint8_t controls_cmd_sequence;
+/* Set once the master's availability page has been seen at least once. */
+static bool controls_master_seen;
 
-static void controls_build_next_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
-  static uint8_t counter;
+/*
+ * Build + send the ANT+ Controls Generic Command page (0x49 / 73) as an
+ * acknowledged message to the paired master (the Edge). Layout (per the
+ * ANT+ Controls device profile, matching OpenSourceEBike):
+ *   [0] = 0x49 page number
+ *   [1..2] = slave serial number (LE)
+ *   [3..4] = slave manufacturer id (LE)
+ *   [5]    = sequence number (increments each command)
+ *   [6..7] = command number (LE)
+ */
+static void controls_send_generic_command(uint16_t command) {
+  uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE] = {
+      CTRL_PAGE_GENERIC_CMD,
+      (uint8_t)(CONTROLS_SERIAL_NUM & 0xFF),
+      (uint8_t)((CONTROLS_SERIAL_NUM >> 8) & 0xFF),
+      (uint8_t)(CONTROLS_MFG_ID & 0xFF),
+      (uint8_t)((CONTROLS_MFG_ID >> 8) & 0xFF),
+      controls_cmd_sequence++,
+      (uint8_t)(command & 0xFF),
+      (uint8_t)((command >> 8) & 0xFF),
+  };
 
-  counter++;
-  if (counter % 10 == 1) {
-    build_common_page_80(page);
-  } else if (counter % 10 == 2) {
-    build_common_page_81(page);
+  ant_err_t err = ant_acknowledge_message_tx(CONTROLS_CHANNEL_NUM,
+                                             ANT_STANDARD_DATA_PAYLOAD_SIZE, page);
+  if (err) {
+    LOG_WRN("page 0x49 ant_acknowledge_message_tx() failed: 0x%X", err);
   } else {
-    build_controls_availability_page(page);
+    LOG_INF("ANT+ Controls: sent Generic Command 0x%04X (seq %u)",
+            command, (unsigned)(controls_cmd_sequence - 1));
   }
 }
 
-static void controls_tx_next(void) {
-  uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE];
+static void controls_handle_rx(const uint8_t *payload) {
+  uint8_t page = payload[0];
 
-  controls_build_next_page(page);
+  if (page == CTRL_PAGE_AVAILABILITY) {
+    /* The master broadcasts this at ~4 Hz; byte 7 is the control
+     * capabilities bitfield. Log only on pairing and when caps change,
+     * so we don't flood the console with a steady 4 Hz stream. */
+    static bool have_caps;
+    static uint8_t last_caps;
+    uint8_t caps = payload[7];
 
-  ant_err_t err = ant_broadcast_message_tx(CONTROLS_CHANNEL_NUM,
-                                           ANT_STANDARD_DATA_PAYLOAD_SIZE, page);
-  if (err) {
-    LOG_WRN("ant_broadcast_message_tx() failed: 0x%X", err);
+    if (!controls_master_seen) {
+      controls_master_seen = true;
+      LOG_INF("ANT+ Controls: paired with master, Device Availability page 0x02 received");
+    }
+    if (!have_caps || caps != last_caps) {
+      have_caps = true;
+      last_caps = caps;
+      LOG_DBG("RX page 0x02: %02X %02X %02X %02X %02X %02X %02X %02X (caps=0x%02X)",
+              payload[0], payload[1], payload[2], payload[3],
+              payload[4], payload[5], payload[6], payload[7], caps);
+    }
+  } else {
+    /* Any other (rarer) page: trace it as it arrives. */
+    LOG_DBG("RX page 0x%02X: %02X %02X %02X %02X %02X %02X %02X %02X",
+            page, payload[0], payload[1], payload[2], payload[3],
+            payload[4], payload[5], payload[6], payload[7]);
   }
 }
 
@@ -730,11 +752,26 @@ static void ant_evt_handler(ant_evt_t *p_ant_evt) {
   }
 
   switch (p_ant_evt->event) {
-    case EVENT_TX:
-      controls_tx_next();
+    case EVENT_RX: {
+      uint8_t msg_id = p_ant_evt->message.ANT_MESSAGE_ucMesgID;
+      if (msg_id == MESG_BROADCAST_DATA_ID ||
+          msg_id == MESG_ACKNOWLEDGED_DATA_ID ||
+          msg_id == MESG_BURST_DATA_ID) {
+        controls_handle_rx(p_ant_evt->message.ANT_MESSAGE_aucPayload);
+      }
+      break;
+    }
+    case EVENT_RX_SEARCH_TIMEOUT:
+      LOG_WRN("ANT Controls ch%u: RX search timeout", p_ant_evt->channel);
+      break;
+    case EVENT_RX_FAIL_GO_TO_SEARCH:
+      LOG_WRN("ANT Controls ch%u: RX fail, back to search", p_ant_evt->channel);
+      controls_master_seen = false;
       break;
     case EVENT_CHANNEL_CLOSED:
-      LOG_WRN("ANT Controls ch%u: EVENT_CHANNEL_CLOSED", p_ant_evt->channel);
+      LOG_WRN("ANT Controls ch%u: EVENT_CHANNEL_CLOSED, reopening", p_ant_evt->channel);
+      controls_master_seen = false;
+      ant_channel_open(CONTROLS_CHANNEL_NUM);
       break;
     default:
       break;
@@ -765,7 +802,7 @@ static int ant_stack_setup(void) {
 static int controls_setup(void) {
   const ant_channel_config_t channel_config = {
       .channel_number    = CONTROLS_CHANNEL_NUM,
-      .channel_type      = CHANNEL_TYPE_SLAVE, //CHANNEL_TYPE_MASTER,
+      .channel_type      = CHANNEL_TYPE_SLAVE,
       .ext_assign        = 0x00,
       .rf_freq           = CONTROLS_RF_FREQ,
       .transmission_type = CONTROLS_TRANS_TYPE,
@@ -781,8 +818,7 @@ static int controls_setup(void) {
     return err;
   }
 
-  controls_tx_next(); /* stage first frame before open */
-
+  /* Slave: no frame to stage, we open in RX search and wait for the Edge. */
   err = ant_channel_open(CONTROLS_CHANNEL_NUM);
   if (err) {
     LOG_ERR("ant_channel_open failed: 0x%X", err);
@@ -794,7 +830,7 @@ static int controls_setup(void) {
 }
 
 void ant_garmin_init(void) {
-  LOG_INF("ANT+ REMOTE (copied from VIRB, device type %d) bring-up starting...",
+  LOG_INF("ANT+ REMOTE (Controls slave, device type %d) bring-up starting...",
           CONTROLS_DEVICE_TYPE);
 
   int err = ant_stack_setup();
@@ -802,7 +838,7 @@ void ant_garmin_init(void) {
     goto ERROR_EXIT;
   }
 
-  err = ant_state_indicator_init(CONTROLS_CHANNEL_NUM, CHANNEL_TYPE_MASTER);
+  err = ant_state_indicator_init(CONTROLS_CHANNEL_NUM, CHANNEL_TYPE_SLAVE);
   if (err) {
     LOG_ERR("ant_state_indicator_init failed: %d", err);
     goto ERROR_EXIT;
@@ -813,7 +849,8 @@ void ant_garmin_init(void) {
     goto ERROR_EXIT;
   }
 
-  LOG_INF("ANT+ REMOTE channel open (dev# %d, type %d)", CONTROLS_DEV_NUM, CONTROLS_DEVICE_TYPE);
+  LOG_INF("ANT+ REMOTE slave searching for Edge master (type %d, wildcard dev#)",
+          CONTROLS_DEVICE_TYPE);
   return;
 
 ERROR_EXIT:
@@ -822,7 +859,23 @@ ERROR_EXIT:
 }
 
 void ant_garmin_handle_button(const char *which) {
-  LOG_WRN("Garmin button '%s' pressed - ANT+ remote command not implemented yet", which);
+  uint16_t command;
+
+  if (strcmp(which, "page_right") == 0) {
+    command = CTRL_CMD_PAGE_SHORT;
+  } else if (strcmp(which, "page_left") == 0) {
+    command = CTRL_CMD_PAGE_LONG;
+  } else if (strcmp(which, "lap") == 0) {
+    command = CTRL_CMD_LAP;
+  } else {
+    LOG_WRN("Garmin button '%s' unknown - no ANT+ command sent", which);
+    return;
+  }
+
+  if (!controls_master_seen) {
+    LOG_WRN("button '%s' pressed but no Edge master paired yet - sending anyway", which);
+  }
+  controls_send_generic_command(command);
 }
 
 void ant_garmin_note_activity(void) {

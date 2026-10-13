@@ -12,8 +12,10 @@
  *     broadcasts the nRF52 internal die temperature (via temp_sensor.h).
  *
  *   ANT_GARMIN_PROFILE_REMOTE (3) - the real Garmin Edge Remote behaviour.
- *     Work in progress: currently a verbatim copy of VIRB, to be evolved into
- *     a proper remote (ANT+ Controls Generic Command page).
+ *     ANT+ Controls *control device* = SLAVE: searches for the Edge (master,
+ *     device type 16) with a wildcard device number, receives its Control
+ *     Device Availability page (0x02), and sends the Generic Command page
+ *     (0x49 / 73) on a button press via ant_garmin_handle_button().
  *
  *   ANT_GARMIN_PROFILE_BSC (0) - clone of the sdk-ant bsc_tx sample (Bicycle
  *     Speed & Cadence sensor). Known-good reference transmitter.
@@ -38,8 +40,9 @@ void ant_garmin_init(void);
 
 /*
  * Handles a Garmin button press ("page_right", "page_left" or "lap").
- * NOT IMPLEMENTED in this bring-up base (the Controls profile is deferred);
- * logs a warning. Kept so the module API is stable for main.c.
+ * In the REMOTE profile this sends the matching ANT+ Controls Generic
+ * Command (page 0x49) to the paired Edge. In other profiles it is a stub
+ * that logs a warning. Kept so the module API is stable for main.c.
  */
 void ant_garmin_handle_button(const char *which);
 
