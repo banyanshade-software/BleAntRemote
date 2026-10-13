@@ -1,15 +1,36 @@
 /*
  * ant_garmin.c - ANT+ bring-up base
  * ==========================================================================
- * Near-verbatim clone of Nordic's sdk-ant `ant_plus/ant_bsc/bsc_tx` sample
- * (see ant_garmin.h for the rationale). The structure below mirrors the
- * sample's src/main.c: channel/profile config macros, the BSC event handler,
- * the simulator, the ANT event handler, profile_setup(), ant_stack_setup()
- * and the operating-time timer. The only reshaping is that the sample's
- * main() body is exposed here as ant_garmin_init(), since main.c owns main().
+ * The ANT profile is chosen at compile time via ANT_GARMIN_PROFILE:
+ *
+ *   ANT_GARMIN_PROFILE_VIRB (1)  <-- default
+ *       ANT+ *Controls* device (device type 16) in the MASTER role. It
+ *       broadcasts and is detected as a controllable device (a scanner / the
+ *       Garmin Edge reports it like a Garmin VIRB). Hand-rolled on the raw
+ *       channel API. This is the current working bring-up target.
+ *
+ *   ANT_GARMIN_PROFILE_THERMO (2)
+ *       ANT+ *Environment* profile (device type 25): broadcasts the nRF52
+ *       internal die temperature (via temp_sensor.h) as a temperature page,
+ *       interleaved with common pages 80/81. Also hand-rolled on the raw
+ *       channel API.
+ *
+ *   ANT_GARMIN_PROFILE_REMOTE (3)
+ *       The real Garmin Edge Remote behaviour. NOT IMPLEMENTED YET - selecting
+ *       it builds an inert stub (ANT stays off). Placeholder for future work
+ *       against the ANT+ Controls device profile document.
+ *
+ *   ANT_GARMIN_PROFILE_BSC (0)
+ *       Near-verbatim clone of the sdk-ant ant_plus/ant_bsc/bsc_tx sample
+ *       (Bicycle Speed & Cadence sensor). Known-good reference transmitter.
+ *
+ * Select a non-default profile with e.g. -DANT_GARMIN_PROFILE=2. main.c only
+ * ever calls ant_garmin_init().
  */
 
 #include "ant_garmin.h"
+
+#include <string.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -17,15 +38,31 @@
 #include <ant_parameters.h>
 #include <ant_state_indicator.h>
 #include <ant_key_manager.h>
-#include <ant_profiles/bsc/simulator/ant_bsc_simulator.h>
 
 LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_INF);
 
+/* ------------------------------------------------------------------------ */
+/* Profile selector                                                         */
+/* ------------------------------------------------------------------------ */
+#define ANT_GARMIN_PROFILE_BSC    0
+#define ANT_GARMIN_PROFILE_VIRB   1   /* ANT+ Controls master (current) */
+#define ANT_GARMIN_PROFILE_THERMO 2   /* ANT+ Environment temperature */
+#define ANT_GARMIN_PROFILE_REMOTE 3   /* Garmin remote - NOT IMPLEMENTED */
+
+#ifndef ANT_GARMIN_PROFILE
+#define ANT_GARMIN_PROFILE ANT_GARMIN_PROFILE_VIRB
+#endif
+
+/* ======================================================================== */
+#if ANT_GARMIN_PROFILE == ANT_GARMIN_PROFILE_BSC
+/* ======================================================================== */
+/* Reference profile: clone of the bsc_tx sample (speed & cadence sensor).  */
+
+#include <ant_profiles/bsc/simulator/ant_bsc_simulator.h>
+
 /*
- * Channel / product constants.
- * ----------------------------------------------------------------------
  * The bsc_tx sample sources these from its own Kconfig (CONFIG_BSC_TX_*,
- * CONFIG_SENSOR_TYPE). That Kconfig is not part of this project, so the
+ * CONFIG_SENSOR_TYPE); that Kconfig is not part of this project, so the
  * values below reproduce the sample's Kconfig defaults verbatim.
  */
 #define BSC_TX_CHANNEL_NUM        0      /* CONFIG_BSC_TX_CHANNEL_NUM */
@@ -126,7 +163,7 @@ static int profile_setup(void) {
   return err;
 }
 
-int ant_stack_setup(void) {
+static int ant_stack_setup(void) {
   int err = ant_init();
   if (err) {
     LOG_ERR("ant_init failed: %d", err);
@@ -147,12 +184,6 @@ int ant_stack_setup(void) {
   return err;
 }
 
-/*
- * Clone of the bsc_tx sample's main(): bring up the stack, the state
- * indicator, the simulator and the BSC sensor profile, then start the
- * operating-time timer. Exposed as ant_garmin_init() because main.c owns
- * the real main() and calls into this module.
- */
 void ant_garmin_init(void) {
   LOG_INF("ANT+ Bicycle Speed and Cadence TX bring-up starting...");
 
@@ -183,11 +214,614 @@ ERROR_EXIT:
 }
 
 void ant_garmin_handle_button(const char *which) {
-  /* Controls (Generic) profile - deferred past this BSC bring-up base. */
-  LOG_WRN("Garmin button '%s' pressed - ANT+ Controls profile not implemented yet", which);
+  LOG_WRN("Garmin button '%s' - no command in BSC reference profile", which);
 }
 
 void ant_garmin_note_activity(void) {
-  /* Activity-gated temperature session - deferred past this bring-up base. */
-  LOG_DBG("ant_garmin_note_activity() - no-op in BSC bring-up base");
+  LOG_DBG("ant_garmin_note_activity() - no-op in BSC reference profile");
 }
+
+/* ======================================================================== */
+#elif ANT_GARMIN_PROFILE == ANT_GARMIN_PROFILE_VIRB
+/* ======================================================================== */
+/* ANT+ Controls device (device type 16) MASTER - broadcasts; detected as a */
+/* controllable device (VIRB-like). Hand-rolled on the raw channel API.     */
+
+#include <ant_init.h>
+#include <ant_interface.h>
+#include <ant_channel_config.h>
+
+/*
+ * The data pages below (Control Device Availability 0x02 + common 80/81) are
+ * enough to be detected as a device-type-16 master. The exact capability
+ * fields and command handling are not filled in (that is the real-remote
+ * work, deferred to ANT_GARMIN_PROFILE_REMOTE). RF 2457 MHz is the fixed
+ * ANT+ constant; the period/transmission type are the commonly cited values.
+ */
+#define CONTROLS_CHANNEL_NUM   0
+#define CONTROLS_NETWORK_NUM   0
+#define CONTROLS_DEVICE_TYPE   16      /* ANT+ Controls */
+#define CONTROLS_DEV_NUM       36
+#define CONTROLS_TRANS_TYPE    5
+#define CONTROLS_RF_FREQ       57      /* 2457 MHz */
+#define CONTROLS_CHANNEL_PERIOD 8192   /* 4.06 Hz */
+
+#define CONTROLS_HW_VERSION    1
+#define CONTROLS_MFG_ID        0x00FF
+#define CONTROLS_MODEL_NUM     0x0001
+#define CONTROLS_SW_VERSION    1
+#define CONTROLS_SERIAL_NUM    0x3ADE68B1u
+
+static void build_common_page_80(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  page[0] = 0x50;
+  page[1] = 0xFF;
+  page[2] = 0xFF;
+  page[3] = CONTROLS_HW_VERSION;
+  page[4] = (uint8_t)(CONTROLS_MFG_ID & 0xFF);
+  page[5] = (uint8_t)((CONTROLS_MFG_ID >> 8) & 0xFF);
+  page[6] = (uint8_t)(CONTROLS_MODEL_NUM & 0xFF);
+  page[7] = (uint8_t)((CONTROLS_MODEL_NUM >> 8) & 0xFF);
+}
+
+static void build_common_page_81(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  page[0] = 0x51;
+  page[1] = 0xFF;
+  page[2] = 0xFF;
+  page[3] = CONTROLS_SW_VERSION;
+  page[4] = (uint8_t)(CONTROLS_SERIAL_NUM & 0xFF);
+  page[5] = (uint8_t)((CONTROLS_SERIAL_NUM >> 8) & 0xFF);
+  page[6] = (uint8_t)((CONTROLS_SERIAL_NUM >> 16) & 0xFF);
+  page[7] = (uint8_t)((CONTROLS_SERIAL_NUM >> 24) & 0xFF);
+}
+
+static void build_controls_availability_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  memset(page, 0xFF, ANT_STANDARD_DATA_PAYLOAD_SIZE);
+  page[0] = 0x02; /* Control Device Availability (capability bytes = placeholder) */
+}
+
+static void controls_build_next_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  static uint8_t counter;
+
+  counter++;
+  if (counter % 10 == 1) {
+    build_common_page_80(page);
+  } else if (counter % 10 == 2) {
+    build_common_page_81(page);
+  } else {
+    build_controls_availability_page(page);
+  }
+}
+
+static void controls_tx_next(void) {
+  uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE];
+
+  controls_build_next_page(page);
+
+  ant_err_t err = ant_broadcast_message_tx(CONTROLS_CHANNEL_NUM,
+                                           ANT_STANDARD_DATA_PAYLOAD_SIZE, page);
+  if (err) {
+    LOG_WRN("ant_broadcast_message_tx() failed: 0x%X", err);
+  }
+}
+
+static void ant_evt_handler(ant_evt_t *p_ant_evt) {
+  if (p_ant_evt->channel != CONTROLS_CHANNEL_NUM) {
+    return;
+  }
+
+  switch (p_ant_evt->event) {
+    case EVENT_TX:
+      controls_tx_next();
+      break;
+    case EVENT_CHANNEL_CLOSED:
+      LOG_WRN("ANT Controls ch%u: EVENT_CHANNEL_CLOSED", p_ant_evt->channel);
+      break;
+    default:
+      break;
+  }
+}
+
+static int ant_stack_setup(void) {
+  int err = ant_init();
+  if (err) {
+    LOG_ERR("ant_init failed: %d", err);
+    return err;
+  }
+  LOG_INF("ANT Version %s", ANT_VERSION_STRING);
+
+  err = ant_cb_register(&ant_evt_handler);
+  if (err) {
+    LOG_ERR("ant_cb_register failed: %d", err);
+    return err;
+  }
+
+  err = ant_plus_key_set(CONTROLS_NETWORK_NUM);
+  if (err) {
+    LOG_ERR("ant_plus_key_set failed: %d", err);
+  }
+  return err;
+}
+
+static int controls_setup(void) {
+  const ant_channel_config_t channel_config = {
+      .channel_number    = CONTROLS_CHANNEL_NUM,
+      .channel_type      = CHANNEL_TYPE_MASTER,
+      .ext_assign        = 0x00,
+      .rf_freq           = CONTROLS_RF_FREQ,
+      .transmission_type = CONTROLS_TRANS_TYPE,
+      .device_type       = CONTROLS_DEVICE_TYPE,
+      .device_number     = CONTROLS_DEV_NUM,
+      .channel_period    = CONTROLS_CHANNEL_PERIOD,
+      .network_number    = CONTROLS_NETWORK_NUM,
+  };
+
+  int err = ant_channel_init(&channel_config);
+  if (err) {
+    LOG_ERR("ant_channel_init failed: 0x%X", err);
+    return err;
+  }
+
+  controls_tx_next(); /* stage first frame before open */
+
+  err = ant_channel_open(CONTROLS_CHANNEL_NUM);
+  if (err) {
+    LOG_ERR("ant_channel_open failed: 0x%X", err);
+    return err;
+  }
+
+  ant_state_indicator_channel_opened();
+  return err;
+}
+
+void ant_garmin_init(void) {
+  LOG_INF("ANT+ Controls master (device type %d, VIRB-like) bring-up starting...",
+          CONTROLS_DEVICE_TYPE);
+
+  int err = ant_stack_setup();
+  if (err) {
+    goto ERROR_EXIT;
+  }
+
+  err = ant_state_indicator_init(CONTROLS_CHANNEL_NUM, CHANNEL_TYPE_MASTER);
+  if (err) {
+    LOG_ERR("ant_state_indicator_init failed: %d", err);
+    goto ERROR_EXIT;
+  }
+
+  err = controls_setup();
+  if (err) {
+    goto ERROR_EXIT;
+  }
+
+  LOG_INF("ANT+ Controls channel open (dev# %d, type %d)", CONTROLS_DEV_NUM, CONTROLS_DEVICE_TYPE);
+  return;
+
+ERROR_EXIT:
+  ant_state_indicator_fatal_error();
+  k_oops();
+}
+
+void ant_garmin_handle_button(const char *which) {
+  LOG_WRN("Garmin button '%s' pressed - ANT+ Controls command not implemented yet", which);
+}
+
+void ant_garmin_note_activity(void) {
+  LOG_DBG("ant_garmin_note_activity() - no-op in VIRB profile");
+}
+
+/* ======================================================================== */
+#elif ANT_GARMIN_PROFILE == ANT_GARMIN_PROFILE_THERMO
+/* ======================================================================== */
+/* ANT+ Environment profile (device type 25) MASTER - broadcasts the nRF52  */
+/* internal die temperature. Hand-rolled on the raw channel API.           */
+
+#include "temp_sensor.h"
+
+#include <ant_init.h>
+#include <ant_interface.h>
+#include <ant_channel_config.h>
+
+/*
+ * NOTE: the ANT+ Environment temperature page byte layout below is the
+ * project's earlier best-effort encoding, NOT verified against the ANT+
+ * Environment device profile document (a different doc than Controls). The
+ * channel is a correct device-type-25 master; refine the page bytes against
+ * the real Environment profile before trusting a specific Garmin's reading.
+ */
+#define ENV_CHANNEL_NUM    0
+#define ENV_NETWORK_NUM    0
+#define ENV_DEVICE_TYPE    25      /* ANT+ Environment */
+#define ENV_DEV_NUM        1
+#define ENV_TRANS_TYPE     5
+#define ENV_RF_FREQ        57      /* 2457 MHz */
+#define ENV_CHANNEL_PERIOD 8192    /* 4.06 Hz (unverified for Environment) */
+
+#define ENV_HW_VERSION     1
+#define ENV_MFG_ID         0x00FF
+#define ENV_MODEL_NUM      0x0001
+#define ENV_SW_VERSION     1
+#define ENV_SERIAL_NUM     0x3ADE68B1u
+
+/* Latest die temperature in hundredths of a degree C, refreshed off-radio by
+ * a periodic workqueue item (sensor reads shouldn't run in the ANT callback). */
+static int16_t env_temp_centi = 2000; /* 20.00 C default until first read */
+
+static void env_temp_work_handler(struct k_work *work) {
+  int16_t t;
+  if (temp_sensor_read(&t)) {
+    env_temp_centi = t;
+    LOG_DBG("Environment: temp = %d.%02d C", t / 100, (t < 0 ? -t : t) % 100);
+  } else {
+    LOG_WRN("Environment: temperature read failed");
+  }
+}
+K_WORK_DEFINE(env_temp_work, env_temp_work_handler);
+
+static void env_temp_timer_expiry(struct k_timer *timer_id) { k_work_submit(&env_temp_work); }
+K_TIMER_DEFINE(env_temp_timer, env_temp_timer_expiry, NULL);
+
+static void build_common_page_80(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  page[0] = 0x50;
+  page[1] = 0xFF;
+  page[2] = 0xFF;
+  page[3] = ENV_HW_VERSION;
+  page[4] = (uint8_t)(ENV_MFG_ID & 0xFF);
+  page[5] = (uint8_t)((ENV_MFG_ID >> 8) & 0xFF);
+  page[6] = (uint8_t)(ENV_MODEL_NUM & 0xFF);
+  page[7] = (uint8_t)((ENV_MODEL_NUM >> 8) & 0xFF);
+}
+
+static void build_common_page_81(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  page[0] = 0x51;
+  page[1] = 0xFF;
+  page[2] = 0xFF;
+  page[3] = ENV_SW_VERSION;
+  page[4] = (uint8_t)(ENV_SERIAL_NUM & 0xFF);
+  page[5] = (uint8_t)((ENV_SERIAL_NUM >> 8) & 0xFF);
+  page[6] = (uint8_t)((ENV_SERIAL_NUM >> 16) & 0xFF);
+  page[7] = (uint8_t)((ENV_SERIAL_NUM >> 24) & 0xFF);
+}
+
+/* Environment "temperature" data page (page 1). Layout is the project's
+ * earlier encoding - see NOTE above. Current temperature is signed, 0.01 C. */
+static void build_env_temperature_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  static uint8_t event_count;
+  int16_t temp_centi = env_temp_centi;
+
+  /* 24h min/max: 0.1 C scale, offset -204.8 C, 12 bits. Here min == max ==
+   * current (no running history kept yet). */
+  uint16_t encoded = (uint16_t)((temp_centi / 100.0f + 204.8f) * 10.0f);
+
+  page[0] = 0x01;                /* page number */
+  page[1] = event_count++;       /* measurement event count */
+  page[2] = (uint8_t)(encoded & 0xFF);                        /* low temp LSB */
+  page[3] = (uint8_t)(((encoded >> 8) & 0x0F) | ((encoded & 0x0F) << 4));
+  page[4] = (uint8_t)((encoded >> 4) & 0xFF);                 /* high temp MSB */
+  page[5] = (uint8_t)(temp_centi & 0xFF);                     /* current temp LSB */
+  page[6] = (uint8_t)((temp_centi >> 8) & 0xFF);              /* current temp MSB */
+  page[7] = 0xFF;                /* reserved */
+}
+
+static void env_build_next_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  static uint8_t counter;
+
+  counter++;
+  if (counter % 10 == 1) {
+    build_common_page_80(page);
+  } else if (counter % 10 == 2) {
+    build_common_page_81(page);
+  } else {
+    build_env_temperature_page(page);
+  }
+}
+
+static void env_tx_next(void) {
+  uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE];
+
+  env_build_next_page(page);
+
+  ant_err_t err = ant_broadcast_message_tx(ENV_CHANNEL_NUM,
+                                           ANT_STANDARD_DATA_PAYLOAD_SIZE, page);
+  if (err) {
+    LOG_WRN("ant_broadcast_message_tx() failed: 0x%X", err);
+  }
+}
+
+static void ant_evt_handler(ant_evt_t *p_ant_evt) {
+  if (p_ant_evt->channel != ENV_CHANNEL_NUM) {
+    return;
+  }
+
+  switch (p_ant_evt->event) {
+    case EVENT_TX:
+      env_tx_next();
+      break;
+    case EVENT_CHANNEL_CLOSED:
+      LOG_WRN("ANT Environment ch%u: EVENT_CHANNEL_CLOSED", p_ant_evt->channel);
+      break;
+    default:
+      break;
+  }
+}
+
+static int ant_stack_setup(void) {
+  int err = ant_init();
+  if (err) {
+    LOG_ERR("ant_init failed: %d", err);
+    return err;
+  }
+  LOG_INF("ANT Version %s", ANT_VERSION_STRING);
+
+  err = ant_cb_register(&ant_evt_handler);
+  if (err) {
+    LOG_ERR("ant_cb_register failed: %d", err);
+    return err;
+  }
+
+  err = ant_plus_key_set(ENV_NETWORK_NUM);
+  if (err) {
+    LOG_ERR("ant_plus_key_set failed: %d", err);
+  }
+  return err;
+}
+
+static int env_setup(void) {
+  const ant_channel_config_t channel_config = {
+      .channel_number    = ENV_CHANNEL_NUM,
+      .channel_type      = CHANNEL_TYPE_MASTER,
+      .ext_assign        = 0x00,
+      .rf_freq           = ENV_RF_FREQ,
+      .transmission_type = ENV_TRANS_TYPE,
+      .device_type       = ENV_DEVICE_TYPE,
+      .device_number     = ENV_DEV_NUM,
+      .channel_period    = ENV_CHANNEL_PERIOD,
+      .network_number    = ENV_NETWORK_NUM,
+  };
+
+  int err = ant_channel_init(&channel_config);
+  if (err) {
+    LOG_ERR("ant_channel_init failed: 0x%X", err);
+    return err;
+  }
+
+  env_tx_next(); /* stage first frame before open */
+
+  err = ant_channel_open(ENV_CHANNEL_NUM);
+  if (err) {
+    LOG_ERR("ant_channel_open failed: 0x%X", err);
+    return err;
+  }
+
+  ant_state_indicator_channel_opened();
+  return err;
+}
+
+void ant_garmin_init(void) {
+  LOG_INF("ANT+ Environment (temperature, device type %d) bring-up starting...",
+          ENV_DEVICE_TYPE);
+
+  int err = ant_stack_setup();
+  if (err) {
+    goto ERROR_EXIT;
+  }
+
+  err = ant_state_indicator_init(ENV_CHANNEL_NUM, CHANNEL_TYPE_MASTER);
+  if (err) {
+    LOG_ERR("ant_state_indicator_init failed: %d", err);
+    goto ERROR_EXIT;
+  }
+
+  /* Refresh the die temperature every 2 s, off the radio callback. */
+  k_work_submit(&env_temp_work);
+  k_timer_start(&env_temp_timer, K_SECONDS(2), K_SECONDS(2));
+
+  err = env_setup();
+  if (err) {
+    goto ERROR_EXIT;
+  }
+
+  LOG_INF("ANT+ Environment channel open (dev# %d, type %d)", ENV_DEV_NUM, ENV_DEVICE_TYPE);
+  return;
+
+ERROR_EXIT:
+  ant_state_indicator_fatal_error();
+  k_oops();
+}
+
+void ant_garmin_handle_button(const char *which) {
+  LOG_WRN("Garmin button '%s' - no command in Environment profile", which);
+}
+
+void ant_garmin_note_activity(void) {
+  LOG_DBG("ant_garmin_note_activity() - no-op in Environment profile");
+}
+
+/* ======================================================================== */
+#elif ANT_GARMIN_PROFILE == ANT_GARMIN_PROFILE_REMOTE
+/* ======================================================================== */
+/* The real Garmin Edge Remote behaviour (ANT+ Controls). STARTING POINT:   */
+/* this is a verbatim copy of the VIRB (Controls master) profile above, to  */
+/* be evolved into a proper remote using the ANT+ Controls device profile   */
+/* document (Generic Command page 0x49, etc.). Until then it behaves exactly */
+/* like VIRB.                                                                 */
+
+#include <ant_init.h>
+#include <ant_interface.h>
+#include <ant_channel_config.h>
+
+#define CONTROLS_CHANNEL_NUM   0
+#define CONTROLS_NETWORK_NUM   0
+#define CONTROLS_DEVICE_TYPE   16      /* ANT+ Controls */
+#define CONTROLS_DEV_NUM       36
+#define CONTROLS_TRANS_TYPE    5
+#define CONTROLS_RF_FREQ       57      /* 2457 MHz */
+#define CONTROLS_CHANNEL_PERIOD 8192   /* 4.06 Hz */
+
+#define CONTROLS_HW_VERSION    1
+#define CONTROLS_MFG_ID        0x00FF
+#define CONTROLS_MODEL_NUM     0x0001
+#define CONTROLS_SW_VERSION    1
+#define CONTROLS_SERIAL_NUM    0x3ADE68B1u
+
+static void build_common_page_80(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  page[0] = 0x50;
+  page[1] = 0xFF;
+  page[2] = 0xFF;
+  page[3] = CONTROLS_HW_VERSION;
+  page[4] = (uint8_t)(CONTROLS_MFG_ID & 0xFF);
+  page[5] = (uint8_t)((CONTROLS_MFG_ID >> 8) & 0xFF);
+  page[6] = (uint8_t)(CONTROLS_MODEL_NUM & 0xFF);
+  page[7] = (uint8_t)((CONTROLS_MODEL_NUM >> 8) & 0xFF);
+}
+
+static void build_common_page_81(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  page[0] = 0x51;
+  page[1] = 0xFF;
+  page[2] = 0xFF;
+  page[3] = CONTROLS_SW_VERSION;
+  page[4] = (uint8_t)(CONTROLS_SERIAL_NUM & 0xFF);
+  page[5] = (uint8_t)((CONTROLS_SERIAL_NUM >> 8) & 0xFF);
+  page[6] = (uint8_t)((CONTROLS_SERIAL_NUM >> 16) & 0xFF);
+  page[7] = (uint8_t)((CONTROLS_SERIAL_NUM >> 24) & 0xFF);
+}
+
+static void build_controls_availability_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  memset(page, 0xFF, ANT_STANDARD_DATA_PAYLOAD_SIZE);
+  page[0] = 0x02; /* Control Device Availability (capability bytes = placeholder) */
+}
+
+static void controls_build_next_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
+  static uint8_t counter;
+
+  counter++;
+  if (counter % 10 == 1) {
+    build_common_page_80(page);
+  } else if (counter % 10 == 2) {
+    build_common_page_81(page);
+  } else {
+    build_controls_availability_page(page);
+  }
+}
+
+static void controls_tx_next(void) {
+  uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE];
+
+  controls_build_next_page(page);
+
+  ant_err_t err = ant_broadcast_message_tx(CONTROLS_CHANNEL_NUM,
+                                           ANT_STANDARD_DATA_PAYLOAD_SIZE, page);
+  if (err) {
+    LOG_WRN("ant_broadcast_message_tx() failed: 0x%X", err);
+  }
+}
+
+static void ant_evt_handler(ant_evt_t *p_ant_evt) {
+  if (p_ant_evt->channel != CONTROLS_CHANNEL_NUM) {
+    return;
+  }
+
+  switch (p_ant_evt->event) {
+    case EVENT_TX:
+      controls_tx_next();
+      break;
+    case EVENT_CHANNEL_CLOSED:
+      LOG_WRN("ANT Controls ch%u: EVENT_CHANNEL_CLOSED", p_ant_evt->channel);
+      break;
+    default:
+      break;
+  }
+}
+
+static int ant_stack_setup(void) {
+  int err = ant_init();
+  if (err) {
+    LOG_ERR("ant_init failed: %d", err);
+    return err;
+  }
+  LOG_INF("ANT Version %s", ANT_VERSION_STRING);
+
+  err = ant_cb_register(&ant_evt_handler);
+  if (err) {
+    LOG_ERR("ant_cb_register failed: %d", err);
+    return err;
+  }
+
+  err = ant_plus_key_set(CONTROLS_NETWORK_NUM);
+  if (err) {
+    LOG_ERR("ant_plus_key_set failed: %d", err);
+  }
+  return err;
+}
+
+static int controls_setup(void) {
+  const ant_channel_config_t channel_config = {
+      .channel_number    = CONTROLS_CHANNEL_NUM,
+      .channel_type      = CHANNEL_TYPE_MASTER,
+      .ext_assign        = 0x00,
+      .rf_freq           = CONTROLS_RF_FREQ,
+      .transmission_type = CONTROLS_TRANS_TYPE,
+      .device_type       = CONTROLS_DEVICE_TYPE,
+      .device_number     = CONTROLS_DEV_NUM,
+      .channel_period    = CONTROLS_CHANNEL_PERIOD,
+      .network_number    = CONTROLS_NETWORK_NUM,
+  };
+
+  int err = ant_channel_init(&channel_config);
+  if (err) {
+    LOG_ERR("ant_channel_init failed: 0x%X", err);
+    return err;
+  }
+
+  controls_tx_next(); /* stage first frame before open */
+
+  err = ant_channel_open(CONTROLS_CHANNEL_NUM);
+  if (err) {
+    LOG_ERR("ant_channel_open failed: 0x%X", err);
+    return err;
+  }
+
+  ant_state_indicator_channel_opened();
+  return err;
+}
+
+void ant_garmin_init(void) {
+  LOG_INF("ANT+ REMOTE (copied from VIRB, device type %d) bring-up starting...",
+          CONTROLS_DEVICE_TYPE);
+
+  int err = ant_stack_setup();
+  if (err) {
+    goto ERROR_EXIT;
+  }
+
+  err = ant_state_indicator_init(CONTROLS_CHANNEL_NUM, CHANNEL_TYPE_MASTER);
+  if (err) {
+    LOG_ERR("ant_state_indicator_init failed: %d", err);
+    goto ERROR_EXIT;
+  }
+
+  err = controls_setup();
+  if (err) {
+    goto ERROR_EXIT;
+  }
+
+  LOG_INF("ANT+ REMOTE channel open (dev# %d, type %d)", CONTROLS_DEV_NUM, CONTROLS_DEVICE_TYPE);
+  return;
+
+ERROR_EXIT:
+  ant_state_indicator_fatal_error();
+  k_oops();
+}
+
+void ant_garmin_handle_button(const char *which) {
+  LOG_WRN("Garmin button '%s' pressed - ANT+ remote command not implemented yet", which);
+}
+
+void ant_garmin_note_activity(void) {
+  LOG_DBG("ant_garmin_note_activity() - no-op in REMOTE profile");
+}
+
+/* ======================================================================== */
+#else
+#error "Invalid ANT_GARMIN_PROFILE (BSC=0, VIRB=1, THERMO=2, REMOTE=3)"
+#endif
+/* ======================================================================== */

@@ -1,28 +1,30 @@
 /*
  * ant_garmin - ANT+ driver (bring-up base)
  * ==========================================================================
- * This module is, for now, a near-verbatim clone of Nordic's sdk-ant
- * `ant_plus/ant_bsc/bsc_tx` sample: it brings up the ANT stack and runs an
- * ANT+ *Bicycle Speed and Cadence* (BSC) TX sensor, with the built-in BSC
- * simulator sweeping the speed/cadence values automatically (the sample's
- * CONFIG_UPDATE_AUTO mode). The goal is a known-good, reference-faithful
- * ANT+ transmitter to validate the radio/stack/hardware before layering the
- * project-specific Garmin behaviour (Controls buttons + temperature
- * broadcast) back on top.
+ * The ANT profile is selected at compile time by ANT_GARMIN_PROFILE in
+ * ant_garmin.c (default: VIRB):
  *
- * Differences from the stock sample (kept intentionally small):
- *   - The sample's `main()` body lives in ant_garmin_init() here, because
- *     main.c owns the real main() and only calls into this module.
- *   - The sample's own Kconfig options (CONFIG_BSC_TX_*, CONFIG_SENSOR_TYPE,
- *     CONFIG_UPDATE_*) are not present in this project, so the channel/
- *     product constants are #defined locally in ant_garmin.c using the
- *     sample's Kconfig default values, and only the AUTO update path is kept
- *     (no dk_buttons - main.c handles buttons).
+ *   ANT_GARMIN_PROFILE_VIRB (1, default) - ANT+ *Controls* device (type 16)
+ *     master. Broadcasts and is detected as a controllable device (VIRB-like).
+ *     Current working bring-up target.
+ *
+ *   ANT_GARMIN_PROFILE_THERMO (2) - ANT+ *Environment* profile (type 25):
+ *     broadcasts the nRF52 internal die temperature (via temp_sensor.h).
+ *
+ *   ANT_GARMIN_PROFILE_REMOTE (3) - the real Garmin Edge Remote behaviour.
+ *     Work in progress: currently a verbatim copy of VIRB, to be evolved into
+ *     a proper remote (ANT+ Controls Generic Command page).
+ *
+ *   ANT_GARMIN_PROFILE_BSC (0) - clone of the sdk-ant bsc_tx sample (Bicycle
+ *     Speed & Cadence sensor). Known-good reference transmitter.
+ *
+ * All profiles expose their setup through ant_garmin_init(), since main.c
+ * owns the real main() and only calls into this module.
  *
  * Build requirements (prj.conf): CONFIG_ANT, CONFIG_ANT_EVALUATION_KEY,
- * CONFIG_ANT_BSC, CONFIG_ANT_BSC_SIMULATOR, CONFIG_ANT_KEY_MANAGER,
- * CONFIG_ANT_CHANNEL_CONFIG, CONFIG_ANT_STATE_INDICATOR. Needs the gated
- * sdk-ant add-on module in the west workspace.
+ * CONFIG_ANT_CHANNEL_CONFIG, CONFIG_ANT_KEY_MANAGER, CONFIG_ANT_STATE_INDICATOR
+ * (+ CONFIG_ANT_BSC / CONFIG_ANT_BSC_SIMULATOR for the BSC reference profile).
+ * Needs the gated sdk-ant add-on module in the west workspace.
  */
 #ifndef ANT_GARMIN_H_
 #define ANT_GARMIN_H_
