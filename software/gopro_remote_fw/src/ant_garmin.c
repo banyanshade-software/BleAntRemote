@@ -50,7 +50,7 @@ LOG_MODULE_REGISTER(ant_garmin, LOG_LEVEL_INF);
 #define ANT_GARMIN_PROFILE_REMOTE 3   /* Garmin remote - NOT IMPLEMENTED */
 
 #ifndef ANT_GARMIN_PROFILE
-#define ANT_GARMIN_PROFILE ANT_GARMIN_PROFILE_VIRB
+#define ANT_GARMIN_PROFILE ANT_GARMIN_PROFILE_THERMO // ANT_GARMIN_PROFILE_REMOTE //ANT_GARMIN_PROFILE_VIRB
 #endif
 
 /* ======================================================================== */
@@ -652,7 +652,7 @@ void ant_garmin_note_activity(void) {
 #define CONTROLS_CHANNEL_NUM   0
 #define CONTROLS_NETWORK_NUM   0
 #define CONTROLS_DEVICE_TYPE   16      /* ANT+ Controls */
-#define CONTROLS_DEV_NUM       36
+#define CONTROLS_DEV_NUM       38
 #define CONTROLS_TRANS_TYPE    5
 #define CONTROLS_RF_FREQ       57      /* 2457 MHz */
 #define CONTROLS_CHANNEL_PERIOD 8192   /* 4.06 Hz */
@@ -686,8 +686,17 @@ static void build_common_page_81(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
 }
 
 static void build_controls_availability_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
-  memset(page, 0xFF, ANT_STANDARD_DATA_PAYLOAD_SIZE);
-  page[0] = 0x02; /* Control Device Availability (capability bytes = placeholder) */
+  memset(page, 0x00, ANT_STANDARD_DATA_PAYLOAD_SIZE);
+  page[0] = 0x02; /* Control Device Availability */
+  page[7] = 0x18; /* capabilities: bit3 = KeypadControl (bisection: only byte7 changed) */
+  // FF => VIRB
+  // 7F idem
+  // 3F => VIRB
+  // 1F => not detected
+  // 0F => not detected 
+  // 30 => VIRB
+  // 10 => not detected
+  // 20 => VIRB
 }
 
 static void controls_build_next_page(uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE]) {
@@ -756,7 +765,7 @@ static int ant_stack_setup(void) {
 static int controls_setup(void) {
   const ant_channel_config_t channel_config = {
       .channel_number    = CONTROLS_CHANNEL_NUM,
-      .channel_type      = CHANNEL_TYPE_MASTER,
+      .channel_type      = CHANNEL_TYPE_SLAVE, //CHANNEL_TYPE_MASTER,
       .ext_assign        = 0x00,
       .rf_freq           = CONTROLS_RF_FREQ,
       .transmission_type = CONTROLS_TRANS_TYPE,
