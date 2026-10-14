@@ -669,10 +669,22 @@ void ant_garmin_note_activity(void) {
 #define CONTROLS_SERIAL_NUM    0x0001
 #define CONTROLS_MFG_ID        0x000F
 
-/* ANT+ Controls "Generic Command Number" codes (page 0x49, bytes 6-7 LE). */
-#define CTRL_CMD_PAGE_LONG     0x0000u
-#define CTRL_CMD_PAGE_SHORT    0x0001u
-#define CTRL_CMD_LAP           0x0024u
+/* ANT+ Controls "Generic Command Number" codes (page 0x49, bytes 6-7 LE).
+ * Official values from the ANT+ Controls Device Profile rev 2.0, Table 9-8
+ * "Command Value Mapping" (D00001307). On a Garmin Edge, Menu Up/Down scroll
+ * the data pages. */
+#define CTRL_CMD_MENU_UP       0x0000u  /* previous menu item / page  */
+#define CTRL_CMD_MENU_DOWN     0x0001u  /* next menu item / page      */
+#define CTRL_CMD_MENU_SELECT   0x0002u  /* select item / enter submenu*/
+#define CTRL_CMD_MENU_BACK     0x0003u  /* up one menu level          */
+#define CTRL_CMD_HOME          0x0004u  /* home screen                */
+#define CTRL_CMD_START         0x0020u  /* start timer (32)           */
+#define CTRL_CMD_STOP          0x0021u  /* stop timer (33)            */
+#define CTRL_CMD_RESET         0x0022u  /* reset timer (34)           */
+#define CTRL_CMD_LENGTH        0x0023u  /* mark length (35)           */
+#define CTRL_CMD_LAP           0x0024u  /* mark lap (36)              */
+#define CTRL_CMD_CUSTOM        0x8000u  /* first custom command       */
+#define CTRL_CMD_NO_COMMAND    0xFFFFu  /* no command (ignored)       */
 
 /* Control Device Availability page received from the master (the Edge). */
 #define CTRL_PAGE_AVAILABILITY 0x02
@@ -687,8 +699,29 @@ void ant_garmin_note_activity(void) {
  * every REMOTE_AUTOTEST_PERIOD once paired, so we can confirm the Edge
  * actually reacts. Set to 0 (or wire real buttons) for normal use.
  */
-#define REMOTE_AUTOTEST         1
-#define REMOTE_AUTOTEST_PERIOD  K_SECONDS(3)
+#define REMOTE_AUTOTEST         0   /* real SW1 button now drives commands */
+#define REMOTE_AUTOTEST_PERIOD  K_SECONDS(4)
+
+#if REMOTE_AUTOTEST
+/* Command-refinement cycle: send one candidate command per tick and name it
+ * in the log, so the effect of each code on the Edge can be identified. */
+struct controls_cmd_entry {
+  const char *name;
+  uint16_t    code;
+};
+static const struct controls_cmd_entry controls_autotest_cycle[] = {
+  { "Menu Up     (0x0000)", CTRL_CMD_MENU_UP     },
+  { "Menu Down   (0x0001)", CTRL_CMD_MENU_DOWN   },
+  { "Menu Select (0x0002)", CTRL_CMD_MENU_SELECT },
+  { "Menu Back   (0x0003)", CTRL_CMD_MENU_BACK   },
+  { "Home        (0x0004)", CTRL_CMD_HOME        },
+  { "Start       (0x0020)", CTRL_CMD_START       },
+  { "Stop        (0x0021)", CTRL_CMD_STOP        },
+  { "Reset       (0x0022)", CTRL_CMD_RESET       },
+  { "Lap         (0x0024)", CTRL_CMD_LAP         },
+  { "Custom      (0x8000)", CTRL_CMD_CUSTOM      },
+};
+#endif
 
 /* Running sequence number for the Generic Command page (byte 5). */
 static uint8_t controls_cmd_sequence;
@@ -735,9 +768,14 @@ static void controls_send_generic_command(uint16_t command) {
 #if REMOTE_AUTOTEST
 static void controls_autotest_work_fn(struct k_work *work) {
   ARG_UNUSED(work);
+  static size_t idx;
+
   if (controls_master_seen) {
-    LOG_INF("autotest: sending 'page' command to the Edge");
-    controls_send_generic_command(CTRL_CMD_PAGE_SHORT);
+    const struct controls_cmd_entry *e =
+        &controls_autotest_cycle[idx % ARRAY_SIZE(controls_autotest_cycle)];
+    LOG_INF("autotest: >>> %s", e->name);
+    controls_send_generic_command(e->code);
+    idx++;
   } else {
     LOG_DBG("autotest: not paired yet, waiting");
   }
@@ -896,10 +934,12 @@ ERROR_EXIT:
 void ant_garmin_handle_button(const char *which) {
   uint16_t command;
 
-  if (strcmp(which, "page_right") == 0) {
-    command = CTRL_CMD_PAGE_SHORT;
+  if (strcmp(which, "next_page") == 0 || strcmp(which, "page_right") == 0) {
+    command = CTRL_CMD_MENU_DOWN;   /* next page on the Edge */
   } else if (strcmp(which, "page_left") == 0) {
-    command = CTRL_CMD_PAGE_LONG;
+    command = CTRL_CMD_MENU_UP;     /* previous page */
+  } else if (strcmp(which, "home") == 0) {
+    command = CTRL_CMD_HOME;        /* back to the main/home screen */
   } else if (strcmp(which, "lap") == 0) {
     command = CTRL_CMD_LAP;
   } else {

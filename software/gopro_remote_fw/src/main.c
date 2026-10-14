@@ -99,6 +99,8 @@ enum rmt_event {
 	EVENT_STATUS_RES_CAM_ON = 5,
 	EVENT_STATUS_RES_CAM_OFF = 6,
 	EVENT_CAM_DISCOVERED = 7	, /* GoPro connected but not recording (e.g. just powered on) */
+	EVENT_ANT_NEXT_PAGE = 8, /* SW1 short press -> ANT+ Controls "next page" (Menu Down) */
+	EVENT_ANT_HOME = 9,      /* SW1 long  press -> ANT+ Controls "home" */
 };
 
 
@@ -116,6 +118,9 @@ K_MSGQ_DEFINE(action_msgq, sizeof(struct remote_msg), 8, 4);
 
 
 #define DEBOUNCE_MS 200
+/* SW1 single-button: held >= LONG_PRESS_MS is a long press (Home),
+ * otherwise a short press (next page). */
+#define LONG_PRESS_MS 600
 struct button {
 	const struct gpio_dt_spec spec;
 	enum rmt_event action;
@@ -156,6 +161,108 @@ static void btn_isr(const struct device *dev, struct gpio_callback *cb, uint32_t
 	k_msgq_put(&action_msgq, &msg, K_NO_WAIT);
 }
 
+/*
+ * SW1 is the dongle's single user button. It needs short-vs-long press
+ * discrimination:
+ *   short press (< LONG_PRESS_MS) -> EVENT_ANT_NEXT_PAGE (Menu Down)
+ *   long  press (>= LONG_PRESS_MS) -> EVENT_ANT_HOME     (Home)
+ *
+ * Reading the pin level directly in the edge ISR is unreliable: contact
+ * bounce produces bursts of edges, and a stray release edge used to clear
+ * the press timestamp so the real release was dropped (long press missed).
+ *
+ * Instead the ISR only wakes a polling work item, which samples the button
+ * every SW1_POLL_MS with a small debounce filter. The long press is emitted
+ * as soon as the hold crosses LONG_PRESS_MS (even if the release bounces),
+ * and the short press is emitted on a clean release. The ANT+ command is
+ * sent from the main loop, not here.
+ */
+#define SW1_POLL_MS        20
+#define SW1_STABLE_SAMPLES 2  /* consecutive equal reads to accept a level */
+
+static void sw1_work_fn(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(sw1_work, sw1_work_fn);
+
+static bool    sw1_down;        /* debounced pressed state */
+static bool    sw1_long_fired;  /* HOME already emitted for this hold */
+static int64_t sw1_down_ms;     /* uptime at debounced press */
+static bool    sw1_raw_last;    /* last raw sample */
+static int     sw1_stable_cnt;  /* consecutive equal raw samples */
+
+static void sw1_post(enum rmt_event ev)
+{
+	struct remote_msg msg = { .action = ev };
+	k_msgq_put(&action_msgq, &msg, K_NO_WAIT);
+}
+
+static void sw1_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	bool raw = (gpio_pin_get_dt(&btn_sw1.spec) == 1); /* 1 = pressed */
+
+	/* Debounce: require SW1_STABLE_SAMPLES equal raw reads in a row. */
+	if (raw == sw1_raw_last) {
+		if (sw1_stable_cnt < SW1_STABLE_SAMPLES) {
+			sw1_stable_cnt++;
+		}
+	} else {
+		sw1_raw_last = raw;
+		sw1_stable_cnt = 0;
+	}
+
+	if (sw1_stable_cnt >= SW1_STABLE_SAMPLES && raw != sw1_down) {
+		sw1_down = raw; /* debounced edge */
+		if (sw1_down) {
+			sw1_down_ms = k_uptime_get();
+			sw1_long_fired = false;
+		} else if (!sw1_long_fired) {
+			sw1_post(EVENT_ANT_NEXT_PAGE); /* clean short release */
+		}
+	}
+
+	/* Long press fires at the threshold, while still held. */
+	if (sw1_down && !sw1_long_fired &&
+	    (k_uptime_get() - sw1_down_ms) >= LONG_PRESS_MS) {
+		sw1_long_fired = true;
+		sw1_post(EVENT_ANT_HOME);
+	}
+
+	/* Keep polling while pressed or not yet settled in the released state. */
+	if (sw1_down || raw || sw1_stable_cnt < SW1_STABLE_SAMPLES) {
+		k_work_schedule(&sw1_work, K_MSEC(SW1_POLL_MS));
+	}
+}
+
+static void sw1_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+{
+	ARG_UNUSED(dev);
+	ARG_UNUSED(cb);
+	ARG_UNUSED(pins);
+	/* Just wake the poller; all logic lives in sw1_work_fn. */
+	k_work_schedule(&sw1_work, K_NO_WAIT);
+}
+
+static int setup_sw1_button(void)
+{
+	int err;
+
+	if (!gpio_is_ready_dt(&btn_sw1.spec)) {
+		LOG_ERR("Button %s GPIO not ready", btn_sw1.name);
+		return -ENODEV;
+	}
+
+	err = gpio_pin_configure_dt(&btn_sw1.spec, GPIO_INPUT);
+	err |= gpio_pin_interrupt_configure_dt(&btn_sw1.spec, GPIO_INT_EDGE_BOTH);
+	if (err) {
+		LOG_ERR("Button %s GPIO configuration failed (%d)", btn_sw1.name, err);
+		return err;
+	}
+
+	gpio_init_callback(&btn_sw1.cb, sw1_isr, BIT(btn_sw1.spec.pin));
+	gpio_add_callback(btn_sw1.spec.port, &btn_sw1.cb);
+	return 0;
+}
+
 static int setup_one_button( struct button *btn)
 {
 	int err;
@@ -184,7 +291,7 @@ static int setup_buttons(void)
 	int err  = 0;
 	err |= setup_one_button(&btn_cam_on);
 	err |= setup_one_button(&btn_cam_off);
-	err |= setup_one_button(&btn_sw1);
+	err |= setup_sw1_button(); /* SW1: short/long press -> ANT+ commands */
 	return err;
 }
 
@@ -602,24 +709,20 @@ int main(void)
 					break;
 			}
 			break;
+		case EVENT_ANT_NEXT_PAGE:
+			LOG_INF("SW1 short press -> ANT+ next page");
+			ant_garmin_note_activity();
+			ant_garmin_handle_button("next_page");
+			break;
+		case EVENT_ANT_HOME:
+			LOG_INF("SW1 long press -> ANT+ home");
+			ant_garmin_note_activity();
+			ant_garmin_handle_button("home");
+			break;
 		default:
 			LOG_ERR("Unknown event %d", msg.action);
 			break;
 		}
-		
-		/*
-		 * TODO once the 3 Garmin buttons (page right/left, lap) are
-		 * wired to GPIOs (see boards/nrf52840dongle_nrf52840.overlay)
-		 * and added to `enum rmt_event` above:
-		 *
-		 * case EVENT_PAGE_R:
-		 * case EVENT_PAGE_L:
-		 * case EVENT_LAP:
-		 *	ant_garmin_note_activity();
-		 *	ant_garmin_handle_button(...);
-		 *	break;
-		 */
-		
 	}
 
 	return 0;
