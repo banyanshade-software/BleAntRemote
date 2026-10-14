@@ -100,7 +100,7 @@ enum rmt_event {
 	EVENT_STATUS_RES_CAM_OFF = 6,
 	EVENT_CAM_DISCOVERED = 7	, /* GoPro connected but not recording (e.g. just powered on) */
 	EVENT_ANT_NEXT_PAGE = 8, /* SW1 short press -> ANT+ Controls "next page" (Menu Down) */
-	EVENT_ANT_HOME = 9,      /* SW1 long  press -> ANT+ Controls "home" */
+	EVENT_ANT_CUSTOM = 9,    /* SW1 long  press -> ANT+ Controls Custom (0x8000) */
 };
 
 
@@ -165,7 +165,7 @@ static void btn_isr(const struct device *dev, struct gpio_callback *cb, uint32_t
  * SW1 is the dongle's single user button. It needs short-vs-long press
  * discrimination:
  *   short press (< LONG_PRESS_MS) -> EVENT_ANT_NEXT_PAGE (Menu Down)
- *   long  press (>= LONG_PRESS_MS) -> EVENT_ANT_HOME     (Home)
+ *   long  press (>= LONG_PRESS_MS) -> EVENT_ANT_CUSTOM   (Custom 0x8000)
  *
  * Reading the pin level directly in the edge ISR is unreliable: contact
  * bounce produces bursts of edges, and a stray release edge used to clear
@@ -224,7 +224,7 @@ static void sw1_work_fn(struct k_work *work)
 	if (sw1_down && !sw1_long_fired &&
 	    (k_uptime_get() - sw1_down_ms) >= LONG_PRESS_MS) {
 		sw1_long_fired = true;
-		sw1_post(EVENT_ANT_HOME);
+		sw1_post(EVENT_ANT_CUSTOM);
 	}
 
 	/* Keep polling while pressed or not yet settled in the released state. */
@@ -714,10 +714,10 @@ int main(void)
 			ant_garmin_note_activity();
 			ant_garmin_handle_button("next_page");
 			break;
-		case EVENT_ANT_HOME:
-			LOG_INF("SW1 long press -> ANT+ home");
+		case EVENT_ANT_CUSTOM:
+			LOG_INF("SW1 long press -> ANT+ custom (0x8000)");
 			ant_garmin_note_activity();
-			ant_garmin_handle_button("home");
+			ant_garmin_handle_button("custom");
 			break;
 		default:
 			LOG_ERR("Unknown event %d", msg.action);

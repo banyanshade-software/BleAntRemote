@@ -690,6 +690,11 @@ void ant_garmin_note_activity(void) {
 #define CTRL_PAGE_AVAILABILITY 0x02
 /* Generic Command page we transmit to the master. */
 #define CTRL_PAGE_GENERIC_CMD  0x49
+/* Common Request Data Page (we send it to ask the Edge for page 0x47). */
+#define CTRL_PAGE_REQUEST      0x46
+/* Common Command Status page the Edge returns: tells whether our last
+ * command passed / failed / was not supported / rejected. */
+#define CTRL_PAGE_CMD_STATUS   0x47
 
 /*
  * Bring-up auto-test: there are no physical Garmin buttons wired to this
@@ -699,7 +704,9 @@ void ant_garmin_note_activity(void) {
  * every REMOTE_AUTOTEST_PERIOD once paired, so we can confirm the Edge
  * actually reacts. Set to 0 (or wire real buttons) for normal use.
  */
-#define REMOTE_AUTOTEST         0   /* real SW1 button now drives commands */
+#define REMOTE_AUTOTEST         0   /* real SW1 button drives commands. Set to 1
+                                     * to cycle all commands + log their Command
+                                     * Status (diagnostic of Edge support). */
 #define REMOTE_AUTOTEST_PERIOD  K_SECONDS(4)
 
 #if REMOTE_AUTOTEST
@@ -733,6 +740,55 @@ static void controls_autotest_work_fn(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(controls_autotest_work, controls_autotest_work_fn);
 #endif
 
+/* Decode the Command Status byte (page 0x47, byte 3) for logging. */
+static const char *controls_status_str(uint8_t s) {
+  switch (s) {
+    case 0:   return "Pass";
+    case 1:   return "Fail";
+    case 2:   return "NotSupported";
+    case 3:   return "Rejected";
+    case 4:   return "Pending";
+    case 255: return "Uninitialized";
+    default:  return "Reserved";
+  }
+}
+
+/*
+ * Ask the Edge (master) for its Command Status page (0x47) by sending the
+ * common Request Data Page (0x46). Page 70 layout (ANT+ Controls Table 10-4):
+ *   [0]   = 0x46 request page
+ *   [1-2] = slave serial (0xFFFF = invalid for command type 0x01)
+ *   [3-4] = descriptor bytes (0xFF = no subpage)
+ *   [5]   = requested transmission response: bits0-6 = #transmissions,
+ *           bit7 = 0 (broadcast reply only, as required for a controllable dev)
+ *   [6]   = requested page number (0x47)
+ *   [7]   = command type 0x01 (request from a controllable device)
+ */
+static void controls_request_command_status(void) {
+  uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE] = {
+      CTRL_PAGE_REQUEST,
+      0xFF, 0xFF,            /* slave serial: invalid */
+      0xFF, 0xFF,            /* descriptor bytes: no subpage */
+      0x04,                  /* transmit the reply 4 times (bit7=0) */
+      CTRL_PAGE_CMD_STATUS,  /* requested page 0x47 */
+      0x01,                  /* command type: request from controllable device */
+  };
+
+  ant_err_t err = ant_acknowledge_message_tx(CONTROLS_CHANNEL_NUM,
+                                             ANT_STANDARD_DATA_PAYLOAD_SIZE, page);
+  if (err) {
+    LOG_WRN("page 0x46 (request status) tx failed: 0x%X", err);
+  } else {
+    LOG_DBG("requested Command Status page 0x47 from the Edge");
+  }
+}
+
+static void controls_status_req_work_fn(struct k_work *work) {
+  ARG_UNUSED(work);
+  controls_request_command_status();
+}
+static K_WORK_DELAYABLE_DEFINE(controls_status_req_work, controls_status_req_work_fn);
+
 /*
  * Build + send the ANT+ Controls Generic Command page (0x49 / 73) as an
  * acknowledged message to the paired master (the Edge). Layout (per the
@@ -762,6 +818,9 @@ static void controls_send_generic_command(uint16_t command) {
   } else {
     LOG_INF("ANT+ Controls: sent Generic Command 0x%04X (seq %u)",
             command, (unsigned)(controls_cmd_sequence - 1));
+    /* Ask the Edge how it handled that command. Delay so the request page
+     * doesn't collide with the acknowledged command TX still in flight. */
+    k_work_schedule(&controls_status_req_work, K_MSEC(300));
   }
 }
 
@@ -805,6 +864,14 @@ static void controls_handle_rx(const uint8_t *payload) {
               payload[0], payload[1], payload[2], payload[3],
               payload[4], payload[5], payload[6], payload[7], caps);
     }
+  } else if (page == CTRL_PAGE_CMD_STATUS) {
+    /* Reply to our page-70 request: status of our last command. */
+    uint8_t  last_cmd_page = payload[1]; /* page number of last command (73) */
+    uint8_t  seq           = payload[2]; /* sequence # we used */
+    uint8_t  status        = payload[3]; /* Pass/Fail/NotSupported/... */
+    uint16_t resp_cmd      = (uint16_t)payload[4] | ((uint16_t)payload[5] << 8);
+    LOG_INF("Command Status (0x47): lastCmdPage=%u seq=%u status=%s cmd=0x%04X",
+            last_cmd_page, seq, controls_status_str(status), resp_cmd);
   } else {
     /* Any other (rarer) page: trace it as it arrives. */
     LOG_DBG("RX page 0x%02X: %02X %02X %02X %02X %02X %02X %02X %02X",
@@ -938,8 +1005,10 @@ void ant_garmin_handle_button(const char *which) {
     command = CTRL_CMD_MENU_DOWN;   /* next page on the Edge */
   } else if (strcmp(which, "page_left") == 0) {
     command = CTRL_CMD_MENU_UP;     /* previous page */
+  } else if (strcmp(which, "custom") == 0) {
+    command = CTRL_CMD_CUSTOM;      /* manufacturer-defined custom action */
   } else if (strcmp(which, "home") == 0) {
-    command = CTRL_CMD_HOME;        /* back to the main/home screen */
+    command = CTRL_CMD_HOME;        /* NOTE: NotSupported on the tested Edge */
   } else if (strcmp(which, "lap") == 0) {
     command = CTRL_CMD_LAP;
   } else {
