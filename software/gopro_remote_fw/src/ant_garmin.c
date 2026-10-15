@@ -698,7 +698,17 @@ void ant_garmin_note_activity(void) {
  * collide. Set REMOTE_CUSTOM_CHAIN_NEXT to 0 to send 0x8000 alone.
  */
 #define REMOTE_CUSTOM_CHAIN_NEXT   1
-#define REMOTE_CUSTOM_CHAIN_DELAY  K_MSEC(400)
+#define REMOTE_CUSTOM_CHAIN_DELAY  K_MSEC(600)
+
+/*
+ * Diagnostic only: after each Generic Command, request the Command Status
+ * page (0x47) to read Pass/NotSupported. That is a 2nd acknowledged TX that
+ * competes with the command (and, when chaining, with the next command) on
+ * the same channel - which made the chained command unreliable. The
+ * command->Edge support map is now known, so leave this at 0 for normal
+ * use; set to 1 to re-measure. See controls_request_command_status().
+ */
+#define REMOTE_STATUS_DIAG         0
 
 /* Control Device Availability page received from the master (the Edge). */
 #define CTRL_PAGE_AVAILABILITY 0x02
@@ -792,6 +802,7 @@ static const char *controls_status_str(uint8_t s) {
  *   [6]   = requested page number (0x47)
  *   [7]   = command type 0x01 (request from a controllable device)
  */
+#if REMOTE_STATUS_DIAG || REMOTE_SWEEP
 static void controls_request_command_status(void) {
   uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE] = {
       CTRL_PAGE_REQUEST,
@@ -816,6 +827,7 @@ static void controls_status_req_work_fn(struct k_work *work) {
   controls_request_command_status();
 }
 static K_WORK_DELAYABLE_DEFINE(controls_status_req_work, controls_status_req_work_fn);
+#endif /* REMOTE_STATUS_DIAG || REMOTE_SWEEP */
 
 /*
  * Build + send the ANT+ Controls Generic Command page (0x49 / 73) as an
@@ -851,9 +863,11 @@ static void controls_send_generic_command(uint16_t command) {
   } else {
     LOG_INF("ANT+ Controls: sent Generic Command 0x%04X (seq %u)",
             command, (unsigned)(controls_cmd_sequence - 1));
+#if REMOTE_STATUS_DIAG
     /* Ask the Edge how it handled that command. Delay so the request page
      * doesn't collide with the acknowledged command TX still in flight. */
     k_work_schedule(&controls_status_req_work, K_MSEC(300));
+#endif
   }
 }
 
