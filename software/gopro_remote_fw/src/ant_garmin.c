@@ -683,8 +683,22 @@ void ant_garmin_note_activity(void) {
 #define CTRL_CMD_RESET         0x0022u  /* reset timer (34)           */
 #define CTRL_CMD_LENGTH        0x0023u  /* mark length (35)           */
 #define CTRL_CMD_LAP           0x0024u  /* mark lap (36)              */
-#define CTRL_CMD_CUSTOM        0x8000u  /* first custom command       */
+#define CTRL_CMD_CUSTOM        0x8000u  /* first custom command (= start/stop) */
+#define CTRL_CMD_CUSTOM2       0x8001u  /* 2nd custom command (under test)     */
 #define CTRL_CMD_NO_COMMAND    0xFFFFu  /* no command (ignored)       */
+
+/*
+ * Optional: chain a "next page" after the custom (long-press) command.
+ * On this Edge, 0x8000 can be bound (Edge: Sensors > Edge Remote > Single
+ * Press / Press & Hold) to jump to a chosen screen, e.g. the map. To land
+ * on the screen right AFTER it (e.g. the data/counter page), we follow the
+ * 0x8000 with a Menu Down (next page). ANT has no "two commands in one
+ * frame", so this is two acknowledged page-73 transmissions back to back,
+ * the 2nd fired REMOTE_CUSTOM_CHAIN_DELAY after the 1st so they don't
+ * collide. Set REMOTE_CUSTOM_CHAIN_NEXT to 0 to send 0x8000 alone.
+ */
+#define REMOTE_CUSTOM_CHAIN_NEXT   1
+#define REMOTE_CUSTOM_CHAIN_DELAY  K_MSEC(400)
 
 /* Control Device Availability page received from the master (the Edge). */
 #define CTRL_PAGE_AVAILABILITY 0x02
@@ -708,6 +722,20 @@ void ant_garmin_note_activity(void) {
                                      * to cycle all commands + log their Command
                                      * Status (diagnostic of Edge support). */
 #define REMOTE_AUTOTEST_PERIOD  K_SECONDS(4)
+
+/*
+ * Custom-command sweep (diagnostic): send every custom command in
+ * [REMOTE_SWEEP_END, REMOTE_SWEEP_START] (descending), read each one's
+ * Command Status, and log ONLY the codes the Edge does NOT reject as
+ * NotSupported. ~REMOTE_SWEEP_PERIOD per code: 0x8FFF..0x8000 is 4096
+ * codes ~= 45 min. Set REMOTE_SWEEP to 0 for normal use.
+ */
+#define REMOTE_SWEEP            0   /* sweep done: on this Edge only 0x8000 and
+                                     * 0x8001 answered (not NotSupported). Set to
+                                     * 1 to re-run the diagnostic sweep. */
+#define REMOTE_SWEEP_START      0x80FFu
+#define REMOTE_SWEEP_END        0x8000u
+#define REMOTE_SWEEP_PERIOD     K_MSEC(700)
 
 #if REMOTE_AUTOTEST
 /* Command-refinement cycle: send one candidate command per tick and name it
@@ -799,7 +827,9 @@ static K_WORK_DELAYABLE_DEFINE(controls_status_req_work, controls_status_req_wor
  *   [5]    = sequence number (increments each command)
  *   [6..7] = command number (LE)
  */
-static void controls_send_generic_command(uint16_t command) {
+/* Low-level: build and acknowledged-TX one page 0x49 with the given command,
+ * incrementing the shared sequence number. Returns the ANT error code. */
+static ant_err_t controls_tx_page73(uint16_t command) {
   uint8_t page[ANT_STANDARD_DATA_PAYLOAD_SIZE] = {
       CTRL_PAGE_GENERIC_CMD,
       (uint8_t)(CONTROLS_SERIAL_NUM & 0xFF),
@@ -810,9 +840,12 @@ static void controls_send_generic_command(uint16_t command) {
       (uint8_t)(command & 0xFF),
       (uint8_t)((command >> 8) & 0xFF),
   };
+  return ant_acknowledge_message_tx(CONTROLS_CHANNEL_NUM,
+                                    ANT_STANDARD_DATA_PAYLOAD_SIZE, page);
+}
 
-  ant_err_t err = ant_acknowledge_message_tx(CONTROLS_CHANNEL_NUM,
-                                             ANT_STANDARD_DATA_PAYLOAD_SIZE, page);
+static void controls_send_generic_command(uint16_t command) {
+  ant_err_t err = controls_tx_page73(command);
   if (err) {
     LOG_WRN("page 0x49 ant_acknowledge_message_tx() failed: 0x%X", err);
   } else {
@@ -823,6 +856,46 @@ static void controls_send_generic_command(uint16_t command) {
     k_work_schedule(&controls_status_req_work, K_MSEC(300));
   }
 }
+
+#if REMOTE_CUSTOM_CHAIN_NEXT
+/* Second half of the custom long-press: a "next page" sent a short delay
+ * after the 0x8000, to land one screen further (see REMOTE_CUSTOM_CHAIN_*). */
+static void controls_custom_chain_work_fn(struct k_work *work) {
+  ARG_UNUSED(work);
+  controls_send_generic_command(CTRL_CMD_MENU_DOWN);
+}
+static K_WORK_DELAYABLE_DEFINE(controls_custom_chain_work,
+                               controls_custom_chain_work_fn);
+#endif
+
+#if REMOTE_SWEEP
+static void controls_sweep_work_fn(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(controls_sweep_work, controls_sweep_work_fn);
+static uint16_t controls_sweep_code = REMOTE_SWEEP_START;
+
+static void controls_sweep_work_fn(struct k_work *work) {
+  ARG_UNUSED(work);
+
+  if (!controls_master_seen) {
+    /* wait until paired before starting the sweep */
+    k_work_schedule(&controls_sweep_work, REMOTE_SWEEP_PERIOD);
+    return;
+  }
+
+  /* Send the current custom code quietly, then request its status. */
+  (void)controls_tx_page73(controls_sweep_code);
+  k_work_schedule(&controls_status_req_work, K_MSEC(300));
+  LOG_DBG("sweep: sent 0x%04X", controls_sweep_code);
+
+  if (controls_sweep_code <= REMOTE_SWEEP_END) {
+    LOG_INF("sweep DONE (0x%04X..0x%04X), see 'sweep SUPPORTED' lines above",
+            REMOTE_SWEEP_START, REMOTE_SWEEP_END);
+    return; /* stop */
+  }
+  controls_sweep_code--;
+  k_work_schedule(&controls_sweep_work, REMOTE_SWEEP_PERIOD);
+}
+#endif
 
 #if REMOTE_AUTOTEST
 static void controls_autotest_work_fn(struct k_work *work) {
@@ -870,8 +943,17 @@ static void controls_handle_rx(const uint8_t *payload) {
     uint8_t  seq           = payload[2]; /* sequence # we used */
     uint8_t  status        = payload[3]; /* Pass/Fail/NotSupported/... */
     uint16_t resp_cmd      = (uint16_t)payload[4] | ((uint16_t)payload[5] << 8);
+#if REMOTE_SWEEP
+    (void)last_cmd_page;
+    /* During the sweep, only surface codes the Edge did NOT reject. */
+    if (status != 2 /* NotSupported */) {
+      LOG_INF("sweep SUPPORTED: custom 0x%04X status=%s (seq=%u)",
+              resp_cmd, controls_status_str(status), seq);
+    }
+#else
     LOG_INF("Command Status (0x47): lastCmdPage=%u seq=%u status=%s cmd=0x%04X",
             last_cmd_page, seq, controls_status_str(status), resp_cmd);
+#endif
   } else {
     /* Any other (rarer) page: trace it as it arrives. */
     LOG_DBG("RX page 0x%02X: %02X %02X %02X %02X %02X %02X %02X %02X",
@@ -965,6 +1047,10 @@ static int controls_setup(void) {
   /* Start the bring-up auto-sender; it no-ops until we are paired. */
   k_work_schedule(&controls_autotest_work, REMOTE_AUTOTEST_PERIOD);
 #endif
+#if REMOTE_SWEEP
+  /* Start the custom-command sweep; it waits until paired. */
+  k_work_schedule(&controls_sweep_work, REMOTE_SWEEP_PERIOD);
+#endif
 
   return err;
 }
@@ -1006,7 +1092,8 @@ void ant_garmin_handle_button(const char *which) {
   } else if (strcmp(which, "page_left") == 0) {
     command = CTRL_CMD_MENU_UP;     /* previous page */
   } else if (strcmp(which, "custom") == 0) {
-    command = CTRL_CMD_CUSTOM;      /* manufacturer-defined custom action */
+    command = CTRL_CMD_CUSTOM;      /* 0x8000 = start/stop on this Edge
+                                     * (sweep: only 0x8000/0x8001 supported) */
   } else if (strcmp(which, "home") == 0) {
     command = CTRL_CMD_HOME;        /* NOTE: NotSupported on the tested Edge */
   } else if (strcmp(which, "lap") == 0) {
@@ -1020,6 +1107,14 @@ void ant_garmin_handle_button(const char *which) {
     LOG_WRN("button '%s' pressed but no Edge master paired yet - sending anyway", which);
   }
   controls_send_generic_command(command);
+
+#if REMOTE_CUSTOM_CHAIN_NEXT
+  /* On the custom long-press, follow 0x8000 with a "next page" so we land
+   * on the screen just after the one 0x8000 jumps to (see the define). */
+  if (command == CTRL_CMD_CUSTOM) {
+    k_work_schedule(&controls_custom_chain_work, REMOTE_CUSTOM_CHAIN_DELAY);
+  }
+#endif
 }
 
 void ant_garmin_note_activity(void) {
