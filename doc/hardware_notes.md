@@ -9,10 +9,15 @@ claims are marked, unverified/assumed points are flagged as such.
 
 ## 1. Hardware summary
 
-- **MCU / radio**: Nordic **nRF52832**, via the **Ebyte E73-2G4M08S1E**
-  module (18.0 x 13.0mm, 43-pin castellated package). Single chip covers
-  both BLE (GoPro link) and ANT+ (Garmin Edge link) — see the specs
-  document for why this chip was chosen over alternatives (e.g. ESP32).
+- **MCU / radio**: Nordic nRF52 with BLE + ANT+ on one chip — see the
+  specs document for why this family was chosen over alternatives (e.g.
+  ESP32). **Module under revision (§9)**: the Ebyte E73-2G4M08S1E
+  previously listed here turned out to be an **nRF52833** (not supported
+  by sdk-ant) and is dropped. Preferred replacement: **Fanstel BT832
+  (nRF52832, 14 × 16mm, castellated, in the JLCPCB library) + 32.768kHz
+  crystal on our board**; alternatives Raytac MDBT42Q, E73-2G4M08S1C,
+  E73-2G4M04S1B. Until §9 is closed, the nRF52832 figures
+  quoted in this document are provisional.
 - **Power**: single **CR2032** coin cell, directly powering the nRF52
   (no regulator — native 1.7–3.6V operating range). A buffer capacitor
   (tantalum/polymer, 47–100µF, low ESR) absorbs BLE/ANT+ current spikes;
@@ -28,6 +33,9 @@ claims are marked, unverified/assumed points are flagged as such.
 - **PCB**: custom board built around the E73 module's castellated
   footprint, with **extended pads** so it can be hand-soldered with an
   iron (no reflow oven required).
+- **User feedback**: red + yellow-green (AlGaInP) indicator LEDs,
+  resistor-fed straight from the cell and sunk by high-drive GPIOs
+  (≈ 5mA red / ≈ 10mA green peak, short flashes) — see §8.
 - **Programming/debug**: **SWD** (SWDIO / SWCLK / GND / VDD) exposed on
   a header or bare pads (`J1`), not populated in production, only used
   during development/flashing.
@@ -560,8 +568,645 @@ that conclusion, just firmer evidence behind it.
 
 ---
 
-## 8. Open points (hardware)
+## 8. User-feedback LEDs on an unregulated, decaying CR2032
 
+**Question**: one or two indicator LEDs (red/green) would help the user
+(action confirmed, failure, low battery). How do we drive them when the
+supply is the bare coin cell, whose voltage drifts from ~3.0V (fresh)
+down to ~2.0V (end of life) and sags further under load?
+
+All figures below were checked against the datasheets linked in §8.8
+(values read from datasheet *graphs* are marked "≈ graph").
+
+### 8.1 The cell voltage is flatter than it sounds
+
+The Energizer CR2032 datasheet shows the Li/MnO₂ discharge curve is a
+**plateau around 2.9V (background load) / ~2.8V (6.8mA pulse load)**
+for roughly the first 75–80% of capacity, then drops steeply towards
+the 2.0V cut-off (235mAh rated to 2.0V). The same datasheet's IR chart
+gives an internal resistance of **≈ 10Ω fresh, ≈ 20–25Ω at ~175mAh,
+then rising past 100Ω** in the last ~30mAh (≈ graph).
+
+**Consequence**: a plain series resistor sized for ~2.8V gives
+essentially constant brightness for most of the cell's life. The
+"varying voltage" problem is real only near end of life — where a
+dimming LED coincides with the low-battery warning anyway.
+
+### 8.2 Colour choice: forward voltage
+
+| Part (Kingbright, 0805) | Colour / material | Vf typ @20mA | Vf at 5–10mA (≈ graph) | Iv typ @20mA | Usable on CR2032? |
+|---|---|---|---|---|---|
+| APT2012SURCK | Hyper red 630nm, AlGaInP | 1.95V | ≈ 1.8–1.85V | 230 mcd | **Yes** |
+| APT2012CGCK | Green 570nm, AlGaInP | 2.1V | ≈ 1.95–2.0V | 50 mcd | **Yes**, fades below ~2.2V |
+| APT2012SGC | Green 568nm, GaP | 2.2V | ≈ 2.0V | 12 mcd | Yes, but very dim |
+| APT2012ZGCK | Green 525nm, InGaN | **3.3V** | — | 550 mcd | **No** — Vf above the cell voltage |
+
+- "Green" must be a **yellow-green AlGaInP (≈570nm)** die, not InGaN:
+  the InGaN part needs 3.3V typ, more than a CR2032 ever delivers.
+  Many red/green bicolour LEDs use InGaN for the green — check Vf.
+- Even the best usable green (CGCK, 50 mcd) is **~4.6× less luminous
+  than the red** (230 mcd) at the same current (mcd already includes the
+  eye's sensitivity). The green needs more current than the red to look
+  comparable.
+- Luminous intensity is **linear with current** on both parts
+  (≈ graph), and temperature-dependent: ≈ ×1.5 at −20°C, ≈ ×0.7 at
+  +60°C relative to 25°C (≈ graph). Vf has a −1.9mV/°C tempco, so
+  **+≈ 85mV at −20°C** — slightly less headroom in winter.
+
+### 8.3 How much current? (≈ 1–3mA is too little)
+
+An earlier draft of this section targeted 1–3mA. That is **too low for
+outdoor use**: from the datasheets' linear Iv(I), 2mA gives ≈ 23 mcd
+(red) and ≈ 5 mcd (green). That is fine indoors but marginal for a
+handlebar in daylight, especially the green. These parts are specified
+at 20mA.
+
+What limits the current is not energy (a 10mA × 100ms flash costs
+≈ 0.28µAh — 1000 flashes ≈ 0.12% of 235mAh) but:
+
+1. **GPIO drive** (nRF52832 PS v1.9 §20.4 *Electrical specification*,
+   p. 158, high drive):
+   - VDD ≥ 2.7V: **IOL,HDH 6 / 10 / 15mA** (min/typ/max) at
+     VSS+0.4V; IOH,HDH 6 / 9 / 14mA at VDD−0.4V.
+   - VDD ≥ 1.7V: only **3mA guaranteed** (IOL,HDL / IOH,HDL) at 0.4V
+     drop.
+   - Standard drive: 1 / 2 / 4mA — unusable here.
+   - Nordic (DevZone, Nordic staff) recommends **≤ 15mA total
+     sink/source for the whole chip**, which may all go to one pin, and
+     recommends **sinking** rather than sourcing (more GND pads than VDD
+     pads).
+   → An effective pin resistance of ≈ 40Ω typ / ≈ 67Ω worst case
+   (0.4V / 10mA, 0.4V / 6mA) at VDD ≥ 2.7V is a reasonable
+   back-of-envelope model.
+2. **Cell sag**: 10mA × 10–25Ω = 0.1–0.25V for most of the life. On a
+   worn cell (IR > 100Ω) it reaches > 1V.
+
+**Recommended target: one LED at a time, peak ≈ 10mA for the green
+and ≈ 5mA for the red** (≈ 25 mcd green, ≈ 58 mcd red — closer in
+perceived brightness than equal currents). This stays inside the
+guaranteed high-drive spec and the 15mA chip budget. Going beyond
+(15–20mA) means an external logic-level N-MOSFET with Rds(on)
+specified at Vgs ≤ 1.8V, to be justified only if the outdoor test
+(§8.7) shows 10mA isn't enough.
+
+### 8.4 Sizing (direct GPIO drive, LED sinking into the pin)
+
+`R = (V_design − Vf) / I − R_pin`, V_design = 2.8V (plateau under
+load), R_pin ≈ 40Ω typ:
+
+| LED | Target I | Vf | R_total | R (E12) | I worst-case pin (67Ω) | I at VDD = 2.4V | I at −20°C |
+|---|---|---|---|---|---|---|---|
+| Green CGCK | 10mA | 2.0V | 80Ω | **39Ω** | ≈ 7.5mA | ≈ 5mA | ≈ 9mA |
+| Red SURCK | 5mA | 1.8V | 200Ω | **150Ω** (+ R_pin ≈ 40–50Ω at 5mA) | ≈ 4.6mA | ≈ 3.2mA | ≈ 4.6mA |
+
+(Derived values — first-order model, to be checked on the bench.) A
+fresh, unloaded cell (~3.0–3.2V) pushes these up by ~20–25%, which is
+harmless (parts rated 30mA DC).
+
+Below ~2.4V the LEDs fade to about half brightness, and the green goes
+out around 2.1V, which is when the cell is nearly empty anyway (§8.1).
+
+**PWM is optional, not required**: since the plateau already gives
+near-constant brightness, PWM is useful mainly to
+(a) **retune brightness in firmware** after the outdoor test, by sizing
+R for the maximum wanted current and dimming down, and (b) balance red
+vs. green by eye. Compensating VDD from the SAADC reading is possible
+but buys little before end of life.
+
+### 8.5 Coin-cell interactions
+
+- **The bulk capacitor does not carry a flash**: ΔV = I·t/C =
+  10mA × 100ms / 100µF = 10V, so the cell supplies the LED itself. The
+  cap only smooths µs–ms radio bursts (or a PWM ripple at ≥ 1kHz,
+  where the cell sees roughly the average current).
+- **Don't overlap the flash with radio TX/RX**: nRF52832 TX at 0dBm
+  draws **11.6mA (LDO) / 5.3mA (DC/DC at 3V)**, RX 11.7 / 5.4mA
+  (PS v1.9 RADIO electrical specification, p. 234). LED + radio
+  ≈ 15–22mA would sag a worn cell (IR > 100Ω) below 1.7V, the
+  minimum supply voltage (VDD 1.7–3.6V). The brown-out reset is at
+  **1.5–1.7V** (VBOR,ON, PS v1.9 p. 103). Flash *after* the BLE/ANT+ exchange, which is also the right UX
+  (report the result). Whether the chosen module (§9) has the DC/DC
+  (inductor fitted) is to be checked.
+- **Measure VDD with the LED off**, or the sag skews the battery-level
+  reading.
+- Keep flashes short (50–150ms) and use a blink pattern for "session
+  active" rather than a steady LED.
+
+### 8.6 Hardware form factor and pins
+
+- **Two discrete 0805 LEDs** (APT2012SURCK + APT2012CGCK), each with its
+  own resistor, **common anode to VDD, cathode → R → GPIO (sink)**: this
+  matches Nordic's sink recommendation, and the LED stays off if the
+  pin floats or is in reset. 0805 is hand-solderable (§1).
+- **2-lead anti-parallel bicolour is ruled out at these currents**: the
+  current goes through two GPIO pins in series (2 × ≈ 0.4V at 10mA),
+  so the green would need ≈ 2.0 + 0.8 = 2.8V, the entire plateau
+  voltage. E.g. Kingbright L-59EGW (5mm, GaAsP red 617nm + GaP green
+  568nm, Vf 2.0 / 2.2V typ, 60 mcd @20mA, per distributor listing) only
+  works at a few mA. A **3-lead common-anode** bicolour would be fine
+  (one GPIO per die, same as discrete) if a single light pipe is wanted,
+  but its green must be AlGaInP/GaP (verify Vf).
+- **Pins: avoid P0.22–P0.31.** PS v1.9 §4.3.1 *GPIO located near the
+  radio*, Table 5 (QFN48), p. 18 restricts them to "low drive, low frequency I/O only",
+  which is incompatible with high-drive LED pins. Note that P0.25–P0.31
+  are also the analog inputs. Also avoid P0.09/P0.10, which are NFC by
+  default (the UICR must be changed to use them as GPIO). Pick from
+  P0.02–P0.08 / P0.11–P0.20, cross-checked against the chosen module's pad map (§9).
+- **Zephyr**: plain GPIO → `NRF_GPIO_DRIVE_H0H1` (or `H0S1` for
+  sink-only) in the devicetree `gpios` flags; via PWM/pinctrl →
+  `nordic,drive-mode = <NRF_DRIVE_H0H1>`.
+- **Daylight**: a recessed window or light pipe through the sealed
+  enclosure; choose together with the enclosure design.
+
+### 8.7 Net answer
+
+Red (AlGaInP 630nm) + **yellow-green AlGaInP 570nm** (not InGaN), each
+with a **series resistor sized for the ~2.8V plateau**, sunk by a
+**high-drive GPIO**, at **≈ 10mA green / ≈ 5mA red** peak, one at a
+time, in short flashes after the radio exchange. No regulator, no
+boost, no extra IC. The CR2032's flat discharge curve keeps brightness
+nearly constant for most of its life; PWM is kept only as a firmware
+brightness knob.
+
+**Open points**:
+- Bench-check the actual currents (R_pin model) and an **outdoor
+  daylight test** through the enclosure window; move to a MOSFET switch
+  only if 10mA isn't visible enough.
+- Confirm whether the chosen module (§9) has the DC/DC inductor fitted
+  (radio current 5 vs. 11mA on the nRF52832). If an nRF52840 module is
+  chosen instead, redo the GPIO figures with the nRF52840 PS.
+- Choose GPIOs on the chosen module's footprint (§9), outside the
+  radio-restricted pins; add LEDs and
+  resistors to the KiCad schematic (`hardware/board`).
+- Define the blink vocabulary in the specs doc (e.g. green = OK,
+  red = failure/no link, red double = low battery). This closes the
+  specs doc's "User feedback (LED/buzzer)" open point on the LED side.
+
+### 8.8 References
+
+- Nordic nRF52832 Product Specification **v1.9**, local copy
+  [`doc/data/nRF52832_PS_v1.9.pdf`](data/nRF52832_PS_v1.9.pdf) — §4.3.1
+  *GPIO located near the radio* (Table 5, p. 18), §20.4 GPIO
+  *Electrical specification* (p. 158), POWER VBOR (p. 103), RADIO
+  current consumption (p. 234) ·
+  [online version](https://docs.nordicsemi.com/bundle/ps_nrf52832/page/gpio.html).
+  The same GPIO / radio / VBOR values appear unchanged in PS v1.0.
+- Nordic DevZone, staff answers on GPIO current:
+  [max GPIO current for nRF52 (15mA total, sink preferred)](https://devzone.nordicsemi.com/f/nordic-q-a/12614/max-gpio-current-for-nrf52) ·
+  [GPIO sink current on nRF52832 (15mA max = at 0.4V drop, 10mA typ)](https://devzone.nordicsemi.com/f/nordic-q-a/15800/gpio-sink-current-on-nrf52832)
+- [Energizer CR2032 datasheet](https://data.energizer.com/pdfs/cr2032.pdf) —
+  discharge curves, pulse test (400Ω, ≈ 6.8mA @2.7V), IR vs. capacity
+- Kingbright datasheets:
+  [APT2012SURCK (hyper red AlGaInP)](https://www.kingbrightusa.com/images/catalog/SPEC/APT2012SURCK.pdf) ·
+  [APT2012CGCK (green AlGaInP 570nm)](https://www.kingbrightusa.com/images/catalog/SPEC/APT2012CGCK.pdf) ·
+  [APT2012SGC (green GaP)](https://www.kingbrightusa.com/images/catalog/SPEC/APT2012SGC.pdf) ·
+  [APT2012ZGCK (green InGaN, counter-example)](https://www.kingbrightusa.com/images/catalog/SPEC/APT2012ZGCK.pdf) ·
+  [L-59EGW bicolour (element14 listing)](https://nz.element14.com/kingbright/l-59egw/led-red-green-617-568nm-5mm/dp/2001770)
+- Zephyr nRF drive-mode macros:
+  [`nordic-nrf-gpio.h`](https://github.com/zephyrproject-rtos/zephyr/blob/main/include/zephyr/dt-bindings/gpio/nordic-nrf-gpio.h) ·
+  [`nrf-pinctrl.h`](https://github.com/zephyrproject-rtos/zephyr/blob/main/include/zephyr/dt-bindings/pinctrl/nrf-pinctrl.h)
+
+---
+
+## 9. Module choice — the E73-2G4M08S1E is an nRF52833
+
+**Finding**: the module this project was built around, the **Ebyte
+E73-2G4M08S1E**, is **not an nRF52832**. Its own user manual (v1.9,
+2026-03, local copy
+[`doc/data/E73-2G4M08S1E_UserManual_EN_v1.9_fr.pdf`](data/E73-2G4M08S1E_UserManual_EN_v1.9_fr.pdf))
+states "nRF52833 … nRF52833-QIAA / aQFN73" (pp. 2 and 4). Its E73 series
+table (p. 11) lists the nRF52832 variant as a different part, the
+**E73-2G4M04S1B**. The 13 × 18mm, 43-pad description in §1 and in the
+specs doc matches the S1E. The "nRF52832" label attached to it is what
+was wrong.
+
+**Why it matters**: the ANT add-on for nRF Connect SDK lists only the
+**nRF52832 and nRF52840** in the nRF52 series (sdk-ant v2.0.0 / v2.1.x,
+[compatibility table](https://ant-nrfconnect.github.io/doc/compatibility.html)).
+The **nRF52833 is not listed**. It might work, but nothing confirms it,
+and ANT+ is a core requirement. **Decision: the nRF52833 / E73-2G4M08S1E
+is dropped (too risky).**
+
+### 9.1 Hard requirement found on the way: a 32.768kHz crystal
+
+The nRF52832 PS v1.9 (§19.4.3–19.4.4, p. 112) gives:
+
+| Parameter | Value |
+|---|---|
+| LFRC (internal RC) tolerance after calibration, `fTOL_CAL_LFRC` | ±250 ppm |
+| LFXO tolerance required by the **BLE** stack, `fTOL_LFXO_BLE` | ±250 ppm |
+| LFXO tolerance required by the **ANT** stack, `fTOL_LFXO_ANT` | **±50 ppm** |
+
+→ BLE alone can run on the calibrated RC oscillator, **ANT cannot**: it
+needs a 32.768kHz crystal (LFXO). A DevZone answer about ANT on the
+LFRC sums it up as "may work in laboratory environments, but will
+probably fail in the field"
+([DevZone: using ANT with LFRC](https://devzone.nordicsemi.com/f/nordic-q-a/43403/using-ant-with-lfrc)).
+**Any candidate module must therefore have the 32.768kHz crystal fitted,
+or at least expose XL1/XL2 so one can be added on our board.**
+
+### 9.2 Candidates
+
+An external 32.768kHz crystal is acceptable. It costs one crystal
+(±20–50 ppm) and two capacitors on our board. The module only has to
+expose XL1/XL2 (P0.00/P0.01). Most third-party modules work this way.
+
+| Module | SoC | ANT (sdk-ant) | Size (mm) | 32.768kHz crystal | Pads / hand-solder | DC/DC inductor | Factory firmware | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| Ebyte **E73-2G4M08S1E** | nRF52833 | **not listed** | 13 × 18 | not on module, XL1/XL2 exposed | castellated, 1.27mm | currents quoted "DC/DC, 3V" | none | **dropped** |
+| Ebyte **E104-BT5032A** | nRF52832 | listed | **11.6 × 16** | **no, and XL1/XL2 not exposed** | castellated, 1.27mm, 24 pads | probably not (TX 13 typ / 19mA max ≈ LDO-mode figures) | **AT firmware, read-protected** | **ruled out** |
+| Ebyte **E73-2G4M04S1B** | nRF52832 | listed | 17.5 × 28.7 | **built in** | castellated | to check | none | fallback (big) |
+| Ebyte **E73-2G4M08S1C** | nRF52840 | listed | 13 × 18 | **built in** | to check | to check | none | candidate |
+| Fanstel **BT832** | nRF52832 | listed | 14 × 16 × 1.9 | external, **XL1/XL2 on castellated pins 3/4** | **16 castellated pins (iron OK)** + 24 LGA pads underneath (optional) | **inductors inside the module** | none stated | **preferred** |
+| Raytac **MDBT42Q** (-P = PCB antenna) | nRF52832 | listed | **10 × 16 × 2.2** | external, **XL1/XL2 on pads 13/14** | **edge pads extend past the outline → iron OK**. Only P0.23/P0.24 sit underneath (can stay unused) | DC/DC is the default mode. The ref. circuit shows L2/L3 → location to check | none stated (an "-AT" variant exists separately) | alternative (hand assembly) |
+| Raytac **MDBT50Q** (-P = PCB antenna) | nRF52840 | listed | 10.5 × 15.5 × 2.05 | external, XL1/XL2 on pads 17/18 | **two inner rows of pads → hot air / reflow, not iron** | **Reg1 inductor inside the module** | Raytac test code (erasable) | candidate if hot-air soldering is OK |
+
+Sources:
+- E73-2G4M08S1E manual (local copy above).
+- E104-BT5032A manual v1.5 ([PDF](https://www.rcscomponents.kiev.ua/datasheets/e104-bt5032a+usermanual_en_v1_5.pdf), §3–4).
+- Ebyte product pages:
+  [E104-BT5032A](https://www.cdebyte.com/products/E104-BT5032A),
+  [E73-2G4M04S1B](https://www.cdebyte.com/products/E73-2G4M04S1B)
+  ("Built in 32.768K real-time clock crystal oscillator"),
+  [E73-2G4M08S1C](https://www.cdebyte.com/products/E73-2G4M08S1C)
+  ("nRF52840 … 13.0*18.0mm … With 32.768K real-time clock"). The S1B
+  size comes from the series table in the S1E manual (p. 11).
+- Raytac datasheets:
+  [MDBT42Q](https://www.espruino.com/datasheets/MDBT42Q-E.pdf) (§2.1
+  pinout, §2.2 recommended pads, §8 reference circuit: "Module's default
+  is using DC-DC mode, and must connect it to external 32.768khz") ·
+  [MDBT50Q](https://cdn.sparkfun.com/assets/4/7/4/3/8/_nRF52840__MDBT50Q-1MV2___MDBT50Q-P1MV2_Ver.K_spec.pdf)
+  (§2.1–2.2, §8: "32MHz crystal and RF (VDD) DC/DC inductor (Reg1) are
+  already inside the module").
+- Both Raytac datasheets ask for a **3.8mm no-ground zone** under the
+  antenna end.
+- Fanstel BT832 datasheet v2.04
+  ([PDF](https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/40/BT832_A_F_AF_V2.04_Dec-2017.pdf)): "16 castellated pins … SMT equipment is not required
+  for soldering castellated pins", pin table p. 11, "Two inductors
+  required for DCDC converter are inside BT832 module" and "we suggest
+  adding a 32.768 kHz crystal and 2 capacitors" (p. 18). The antenna
+  area should overhang the host PCB / ground plane by 6mm (p. 12).
+
+**E104-BT5032A, details**: attractive on size and chip, but:
+- **No 32.768kHz crystal.** A DevZone user says so
+  ([thread 74531](https://devzone.nordicsemi.com/f/nordic-q-a/74531/trying-to-flash-e104-bt5032a)),
+  and it is consistent with the pinout: P0.00/P0.01 (XL1/XL2) are not
+  among the 24 pads (manual §4). One cannot be added, which **rules it
+  out for ANT** (§9.1).
+- Ships with Ebyte's serial-to-BLE AT firmware and is read-protected.
+  It needs `nrfjprog --recover` over SWD (pads 23/24). Two DevZone users
+  report trouble
+  ([74531](https://devzone.nordicsemi.com/f/nordic-q-a/74531/trying-to-flash-e104-bt5032a),
+  [82036](https://devzone.nordicsemi.com/f/nordic-q-a/82036/trying-to-do-a-flash-of-e104-bt5032a)),
+  probably a SoftDevice configured for an absent LFXO.
+- Only 8 freely named GPIOs (P0.02–P0.07, P0.25, P0.26). The 9 AT
+  function pads (MOD, WKP, DISC, LINK, DATA, RXD, TXD, RTS, CTS) have no
+  documented nRF pin mapping.
+
+**Fanstel BT832 (nRF52832)**:
+- **Watch the variant suffix — only the plain `BT832` is an nRF52832.**
+  The family shares a footprint but not the SoC: `BT832` = **nRF52832**
+  (512KB/64KB, Cortex-M4F with FPU, NFC); `BT832A` and `BT832AF` =
+  **nRF52810** (192KB/24KB, M4 without FPU) — *avoid*: wrong chip, too
+  little flash/RAM for the ANT+BLE SoftDevice, and the nRF52810 is **not
+  in the sdk-ant compatibility list** (only 52832/52840). `BT832F` is
+  also an nRF52832 but a larger long-range (FEM) variant, unnecessary
+  here. The JLCPCB part `C7092400` (§9.5) is the correct plain `BT832`.
+  [Mouser: BT832A/AF are nRF52810](https://www.mouser.ie/new/fanstel/fanstel-bt832a-bt832af-modules) ·
+  [DigiKey: BT832F (nRF52832)](https://www.digikey.com/en/product-highlight/f/fanstel/bt832f-long-range-bluetooth-5-module)
+- Same chip as the firmware, the specs doc and §8 assume.
+- 14 × 16mm, smaller than the E73.
+- **DC/DC inductors confirmed inside the module** (open point §8.5
+  closed for this module).
+- **The 16 castellated pins alone cover our needs**:
+  - power and debug: VDD, GND, SWDIO/SWDCLK, P0.21/RESET;
+  - crystal: XL1/XL2 (P0.00/P0.01);
+  - LEDs: two of P0.02, P0.03, P0.13, P0.18, P0.20, which are high
+    drive and outside the radio-restricted range;
+  - buttons: P0.26, P0.27 (radio-near, fine for slow inputs) plus the
+    remaining three of P0.02/P0.03/P0.13/P0.18/P0.20;
+  - spare: P0.09/P0.10, once switched from NFC in the UICR.
+  The 24 LGA pads underneath can stay unconnected, so the module can be
+  soldered with an iron.
+- **In the JLCPCB parts library** (§9.5).
+- Needs the external 32.768kHz crystal, and its PCB antenna should
+  overhang the board edge by 6mm, which constrains the enclosure layout.
+
+**Raytac MDBT42Q (nRF52832)**:
+- It is the chip the firmware, the specs doc and §8 were written for,
+  so the §8 GPIO figures stay valid.
+- It is the **smallest hand-solderable option** (160mm², vs 234mm² for
+  the E73 13 × 18).
+- All 32 GPIOs are brought out. On the left edge: P0.25–P0.31, DEC4,
+  DCC, VDD. On the right edge: P0.11–P0.22, SWDIO/SWDCLK and
+  P0.21/RESET. On the bottom edge: XL1/XL2, P0.02–P0.10.
+- Raytac is a Nordic module partner and the module is sold through the
+  usual distributors (Mouser datasheet listing, Tindie).
+- It needs the 32.768kHz crystal on our board.
+
+**E73-2G4M04S1B (nRF52832)**: built-in LFXO and no factory firmware,
+but **~2.1× the area** of the S1E (17.5 × 28.7 vs 13 × 18mm), and a PCB
+antenna with its keep-out. Only worth it if the MDBT42Q is unavailable.
+
+**E73-2G4M08S1C / MDBT50Q (nRF52840)**: ANT-supported, and the **same
+chip as the nRF52840 Dongle** used for BLE bring-up. The firmware
+already plans to support both nRF52832 and nRF52840 (specs doc,
+"Decision: support both nRF52832 and nRF52840"). The S1C has a built-in
+LFXO but its pads are not yet checked. The MDBT50Q needs hot-air
+soldering. Choosing either means redoing §8 against the nRF52840 PS.
+
+### 9.3 Recommendation
+
+**Decision (updated) — three modules kept, in this order:**
+
+1. **Fanstel BT832 (nRF52832) + 32.768kHz crystal on our board** —
+   primary. Works for both hand soldering (castellated pins only) and
+   JLCPCB assembly (§9.5, Economic PCBA, no X-ray).
+2. **Ebyte E73-2G4M08S1E (nRF52833)** — second choice, **kept because we
+   already have this module in hand** (useful for immediate BLE bring-up
+   and, importantly, to *test whether ANT actually runs on the
+   nRF52833*). This partially reverses the "dropped" verdict at the top
+   of §9: the risk is unchanged — **the nRF52833 is still not in the
+   sdk-ant compatibility list (§9)**, so ANT support stays *unverified*;
+   it is a second choice precisely because that risk is only acceptable
+   on hardware already owned, not for a new build. If the ANT test fails,
+   fall back to option 1 or 3.
+3. **Ebyte E73-2G4M04S1B (nRF52832)** — third choice: ANT-supported and
+   with a built-in LFXO (no external crystal needed), but ~2.1× the area
+   of the others (17.5 × 28.7mm).
+
+Previously-listed alternatives now set aside (nRF52840 path, or
+non-JLCPCB): Raytac MDBT42Q, E73-2G4M08S1C, MDBT50Q. The E104-BT5032A
+remains ruled out.
+
+Before freezing the PCB:
+1. **Footprint** from the BT832 datasheet (castellated pins extended
+   outward for iron soldering, like the current E73 template; LGA pads
+   either omitted or left unconnected). The antenna overhangs the board
+   edge by 6mm.
+2. **32.768kHz crystal**: ±20 ppm class, CL compatible with the nRF52832
+   LFXO (`CL_LFXO` 12.5pF max, ESR ≤ 100kΩ — PS v1.9 §19.4.4), plus its
+   two load capacitors, placed close to castellated pins 3/4. Firmware:
+   `CONFIG_CLOCK_CONTROL_NRF_K32SRC_XTAL=y` and the matching
+   `..._K32SRC_*PPM` option.
+3. **DC/DC**: inductors are inside the BT832; enable the DC/DC in
+   firmware (radio current 5.3 vs 11.6mA TX 0dBm, nRF52832 PS).
+4. **Pin plan** (castellated pins only): LEDs on two of P0.02 / P0.03
+   / P0.13 / P0.18 / P0.20; buttons on P0.26, P0.27 and the remaining
+   three. Consistent with §8.6.
+5. Bring-up: flash an sdk-ant BLE + ANT sample (e.g. the HRM relay
+   sample) on a BT832 board (e.g. Fanstel's EV-BT832) with the LFXO
+   enabled.
+
+**Knock-on edits once the module is confirmed** (not done yet):
+`gopro_garmin_remote_specs.md` (MCU section, BOM, ANT section),
+`software/gopro_remote_fw/README.md`, the comment in
+`software/gopro_remote_fw/src/main.c`, `hardware/board/README.md` and
+the KiCad symbol/footprint. All of them currently say
+"E73-2G4M08S1E (nRF52832)".
+
+### 9.4 Other manufacturers (not yet checked)
+
+Nordic keeps an official list of nRF52832 modules
+([nRF52832 modules](https://www.nordicsemi.com/Products/nRF52832/Modules?lang=en)),
+with about 30 vendors. The table below is a shortlist filtered for size
+≤ ~16 × 16mm, enough GPIOs (≥ 7 needed: 5 buttons + 2 LEDs) and an
+"open CPU" listing. Sizes and GPIO counts come from that list. Only the
+crystal column was checked, and only where a source is given.
+
+| Vendor / module | Size (mm) | GPIO | Notes |
+|---|---|---|---|
+| Raytac MDBT42 (no "Q") | 8.8 × 13.8 | 32 | Smaller sibling of the MDBT42Q, pads not checked |
+| Fanstel BM832 | 10.2 × 15 | 32 | Smaller Fanstel sibling of the BT832 (§9.2), pads not checked |
+| Ezurio (ex-Laird) BL652-SA | 10 × 14 | 32 | External 32.768kHz crystal optional ([Ezurio FAQ](https://www.ezurio.com/support/faqs/does-bl652-use-different-clock-source-internal-rc-oscillator)). Industrial-grade, pricier |
+| u-blox BMD-300 / BMD-350, ANNA-B112 | 14 × 9.8 / 8.65 × 6.4 / 6.5 × 6.5 | 32 / 32 / 25 | **No LF crystal on module** ([u-blox AppNote UBX-20009617](https://www.u-blox.com/sites/default/files/LFCLK-source-in-mbed-openCPU-nRF5_AppNote_%28UBX-20009617%29.pdf)). Small parts likely LGA (not iron-friendly) |
+| Dynastream D52MD2M8IA | 14 × 9.8 | 24 | Dynastream is Garmin's ANT subsidiary, so an ANT-oriented module. Availability not checked |
+| MinewSemi MS50SFA | 15.8 × 12 | 13 | Not checked |
+| Holyiot 17095 | 9.4 × 9.25 | 11 | Cheap (AliExpress), not checked |
+
+Ruled out from the same list: AT-command-only parts (e.g. Würth
+Proteus-I/II, u-blox NINA-B11x "u-connect" variants), and LGA/SiP parts
+too small to hand-solder (Insight SiP ISP1507, KAGA FEI ES2832,
+WISOL BTS100A…).
+
+### 9.5 JLCPCB assembly (PCB + SMT)
+
+JLCPCB can assemble the board if the module is in its parts library
+(LCSC stock). With that, the hand-solder constraint (§1) only matters
+for prototypes, and the passives (crystal, capacitors, LED resistors)
+can be placed by JLCPCB too. Library status checked on the JLCPCB part
+pages. Stock and price change daily, so check them when ordering.
+
+| Module | SoC | JLCPCB part | Library | PCBA type | Notes |
+|---|---|---|---|---|---|
+| **Fanstel BT832** | nRF52832 | [C7092400](https://jlcpcb.com/partdetail/Fanstel-BT832/C7092400) | Extended | **Economic + Standard** | EasyEDA symbol/footprint available |
+| Ebyte E73-2G4M08S1C | nRF52840 | [C356849](https://jlcpcb.com/partdetail/Chengdu_Ebyte_ElecTech-E73_2G4M08S1C/C356849) | Extended | **Standard only, X-ray required** | Built-in LFXO |
+| Ebyte E73-2G4M04S1B | nRF52832 | [C411306](https://jlcpcb.com/partdetail/Chengdu_Ebyte_ElecTech-E73_2G4M04S1B/C411306) | — | Economic + Standard | 28.7 × 17.5mm, built-in LFXO |
+| Raytac MDBT50Q-512K | **nRF52833** | [C6904155](https://jlcpcb.com/partdetail/RAYTAC-MDBT50Q512K/C6904155) | Extended | Economic + Standard, X-ray | **Not usable**: the -512K variant is the nRF52833 (the nRF52840 one is MDBT50Q-1MV2) |
+| Raytac MDBT42Q | nRF52832 | not found | — | — | Would need JLCPCB global sourcing or consigned parts (not checked) |
+
+"Extended" parts carry a per-part loading fee at JLCPCB (Basic parts
+don't). One module plus a few passives keeps that small.
+
+### 9.6 Cost estimate (module placed at JLCPCB)
+
+Rough all-in cost *of the module slot only* (module price + its share of
+the PCBA overhead), to compare the three realistic candidates. Excludes
+the bare-PCB fab, the other components, the 32.768kHz crystal + 2 caps
+needed by the nRF52832 modules (~$0.2–0.5 BOM), and shipping. Figures
+are indicative (LCSC/JLCPCB, ~Sep–Oct 2025; the BT832 was out of stock
+at the time of the check — reconfirm in the quote tool at order time).
+
+Module prices (LCSC, per piece):
+
+| Module | SoC | LCSC/JLCPCB | @1 | @10/100 |
+|---|---|---|---|---|
+| E73-2G4M04S1B | nRF52832 | C411306 | ~$5.03 | ~$4.59 (100) |
+| **Fanstel BT832** | nRF52832 | C7092400 | ~$7.37 | ~$7.19 (10), ~$5.9 (1000) |
+| E73-2G4M08S1C | nRF52840 | C356849 | ~$7.59 | ~$5.52 (100) |
+
+JLCPCB overhead that differs between them:
+
+- **Filière**: the two nRF52832 modules (S1B, BT832) are **Economic
+  PCBA-eligible → no mandatory X-ray**. The nRF52840 **S1C is Standard
+  PCBA only and requires X-ray** (§9.5).
+- **Setup fee** (once per order): Economic $8 · Standard single-side
+  $25.
+- **X-ray** (per board, S1C only): $1.57 (1–10) · $0.79 (11–50) ·
+  $0.47 (51–200).
+- **Extended-part loading**: ~$3 once per order (all three are Extended).
+
+All-in per board (setup/X-ray amortised over the lot):
+
+| Module | @5 boards | @100 boards |
+|---|---|---|
+| E73-2G4M04S1B (52832, Economic) | ≈ $7.2 | ≈ $4.7 |
+| **Fanstel BT832** (52832, Economic) | ≈ $9.6 | ≈ $6.4 |
+| E73-2G4M08S1C (52840, Standard + X-ray) | ≈ $14.8 | ≈ $6.3 |
+
+**Reading**: in prototype quantities the nRF52840 S1C costs ~2× the S1B
+to place, driven by the forced Standard PCBA + X-ray, *not* by the chip
+price; the gap nearly closes at 100+. The BT832 is the dearest of the
+two nRF52832 options as a bare module (~$7.4 vs ~$5.0), but still well
+under the S1C in prototype runs because it avoids X-ray — the premium
+buys a module ~2× more compact (14×16 vs 17.5×28.7mm) than the S1B with
+the DC/DC inductors already inside.
+
+Sources:
+[JLCPCB C7092400 (BT832)](https://jlcpcb.com/partdetail/Fanstel-BT832/C7092400) ·
+[LCSC C356849 (S1C)](https://lcsc.com/product-detail/C356849.html) ·
+[LCSC C411306 (S1B)](https://www.lcsc.com/product-image/C411306.html) ·
+[JLCPCB PCB assembly price (setup + X-ray tiers)](https://jlcpcb.com/help/article/pcb-assembly-price).
+
+### 9.7 I/O (GPIO) selection and pin mapping
+
+We need **7 user I/O**: 5 buttons + 2 LEDs (see §5–§6 and §8), plus the
+fixed lines (crystal, SWD, RESET, power). This section picks GPIOs that
+avoid the pins Nordic flags near the radio, and gives the mapping on the
+pads of each of the three selected modules (§9.3).
+
+**Selection rules**
+
+- **LEDs → high-drive GPIOs, *outside* the radio-restricted set.** The
+  LEDs are driven at ≈5–10mA from a high-drive pin (§8.3–§8.6), which is
+  exactly the "high current near the radio" case Nordic warns degrades
+  RX sensitivity.
+- **Buttons → anything left, radio-restricted pins allowed.** A button is
+  a slow, DC-level input (≤10kHz, the "low frequency I/O" limit), so the
+  restricted pins are fine for buttons — that is where we put them.
+- **Avoid the NFC pins P0.09 / P0.10** unless we deliberately switch them
+  to GPIO in the UICR (`CONFIG_NFCT_PINS_AS_GPIOS=y` in Zephyr). They
+  default to the NFC antenna function.
+- **Reserved, not usable as user I/O**: XL1/XL2 (P0.00/P0.01, the
+  32.768kHz crystal — on the BT832 and S1E; the S1B has it internal),
+  SWDIO/SWDCLK (debug), and RESET (**P0.21** on nRF52832, **P0.18** on
+  nRF52833).
+
+**Radio-restricted pins ("… low frequency I/O only" in the PS pin table)**
+
+- **nRF52832** (BT832, E73-2G4M04S1B): **P0.22–P0.31**. Note P0.25–P0.31
+  double as the analog inputs.
+  [nRF52832 pin assignments](https://docs.nordicsemi.com/r/bundle/ps_nrf52832/page/pin.html)
+- **nRF52833** (E73-2G4M08S1E) — a *different* list, must not be assumed
+  equal to the 52832's: **P0.02, P0.03, P0.09, P0.10, P0.19, P0.23,
+  P0.25, P0.28, P0.29, P0.30, P0.31, P1.01, P1.02, P1.03, P1.04, P1.05,
+  P1.06, P1.07**.
+  [nRF52833 pin assignments](https://docs.nordicsemi.com/r/bundle/ps_nrf52833/page/pin.html)
+
+#### Unified pin plan (one firmware for all three boards)
+
+The intersection of the three modules' broken-out GPIOs is small (the
+BT832's 16 castellated pins are the limiting factor, and the S1E does not
+break out P0.27, while its P0.18 is RESET). Exactly **seven** lines are
+common to all three, which is just enough:
+
+| Function | Pin | High-drive? | Notes |
+|---|---|---|---|
+| LED green | **P0.13** | yes, non-restricted on 52832 **and** 52833 | ✔ ideal for an LED |
+| LED red | **P0.20** | yes, non-restricted on 52832 **and** 52833 | ✔ ideal for an LED |
+| Button 1 | **P0.02** | input (restricted on 52833, fine as button) | AIN0 |
+| Button 2 | **P0.03** | input (restricted on 52833, fine as button) | AIN1; also the BT832 AT-mode strap — irrelevant with our own firmware |
+| Button 3 | **P0.26** | input (restricted on 52832, fine as button) | — |
+| Button 4 | **P0.09** | input | NFC1 → set `NFCT_PINS_AS_GPIOS` |
+| Button 5 | **P0.10** | input | NFC2 → set `NFCT_PINS_AS_GPIOS` |
+
+Cost of this plan: it spends the two NFC pins on buttons (one UICR
+setting; we use no NFC). If that is unwanted, use the per-module plans
+below, which have spare non-NFC pins on the S1E and S1B (only the BT832,
+limited to 16 castellated pins, has no alternative to P0.09/P0.10 for the
+5th button unless an LGA pad is brought out).
+
+#### Per-module mapping
+
+**Fanstel BT832 (nRF52832)** — castellated pins only (LGA pads left
+unconnected, §9.2). All 16:
+
+| Cast. pin | Signal | Role in our design |
+|---|---|---|
+| 1 | P0.26 | Button 3 (radio-restricted, ok for input) |
+| 2 | P0.27 | spare button (radio-restricted) |
+| 3 | P0.00/XL1 | 32.768kHz crystal |
+| 4 | P0.01/XL2 | 32.768kHz crystal |
+| 5 | P0.02/AIN0 | Button 1 |
+| 6 | P0.03/AIN1 | Button 2 (AT-mode strap — n/a for our fw) |
+| 7 | P0.09/NFC1 | Button 4 (needs `NFCT_PINS_AS_GPIOS`) |
+| 8 | P0.10/NFC2 | Button 5 (needs `NFCT_PINS_AS_GPIOS`) |
+| 9 | VDD | power |
+| 10 | GND | power |
+| 11 | P0.13 | **LED green** (high-drive, non-restricted) |
+| 12 | P0.18 | spare / alt LED (high-drive, non-restricted) |
+| 13 | P0.20 | **LED red** (high-drive, non-restricted) |
+| 14 | P0.21/RESET | RESET |
+| 15 | SWDCLK | debug |
+| 16 | SWDIO | debug |
+
+Here P0.18 (pin 12) and P0.27 (pin 2) are spares; if we want to free the
+NFC pins, move Button 4 → P0.18 and keep only one NFC pin (or route an
+LGA pad). With 5 buttons + 2 LEDs we are at the limit of the 16
+castellated pins.
+[BT832 datasheet (pin functions)](https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/40/BT832_A_F_AF_V2.04_Dec-2017.pdf)
+
+**Ebyte E73-2G4M08S1E (nRF52833)** — plenty of GPIOs, so no NFC pin is
+needed. Recommended assignment (all high-drive, non-restricted for the
+LEDs):
+
+| Module pad | Signal | Role |
+|---|---|---|
+| 11 | XL1 (P0.00) | 32.768kHz crystal |
+| 13 | XL2 (P0.01) | 32.768kHz crystal |
+| 33 | P0.13 | **LED green** (non-restricted) |
+| 32 | P0.20 | **LED red** (non-restricted) |
+| 14 | P0.06 | Button 1 (non-restricted, could also be an LED) |
+| 16 | P0.08 | Button 2 |
+| 22 | P0.07 | Button 3 |
+| 20 | P0.12 | Button 4 |
+| 12 | P0.26 | Button 5 (non-restricted on 52833) |
+| 37 / 39 | SWDIO / SWDCLK | debug |
+| 26 | RST (P0.18) | RESET |
+
+(Pads for P0.02/P0.03/P0.25/P0.28–P0.31 and the P1.x lines are the
+radio-restricted ones on the 52833 — keep them for extra buttons or leave
+unused. This module can run the unified plan above too, but the plan
+here avoids burning the NFC pins.) Needs an external 32.768kHz crystal
+(XL1/XL2, pads 11/13), same as the BT832.
+
+**Ebyte E73-2G4M04S1B (nRF52832)** — built-in LFXO (no external crystal;
+XL1/XL2 are not broken out). High-drive pins P0.02–P0.08 / P0.11–P0.20
+are plentiful:
+
+| Module pin | Signal | Role |
+|---|---|---|
+| 28 | P0.13 | **LED green** (non-restricted) |
+| 35 | P0.20 | **LED red** (non-restricted) |
+| 17 | P0.02 | Button 1 |
+| 18 | P0.03 | Button 2 |
+| 19 | P0.04 | Button 3 |
+| 20 | P0.05 | Button 4 |
+| 21 | P0.06 | Button 5 |
+| 37 / 38 | SWDCLK / SWDIO | debug |
+| 36 | P0.21/RST | RESET |
+
+(Avoid P0.22–P0.31 — pins 5–11 and 39–41 — for the LEDs; they are the
+radio-restricted set and P0.25–P0.31 are also analog inputs. They remain
+fine as extra button inputs. The NFC pins P0.09/P0.10 are pins 24/25
+here and are left free in this plan.)
+
+**Common to all three**: SWDIO/SWDCLK on `J1` (§2), RESET broken out,
+LEDs on **P0.13 / P0.20** (the two pins that are high-drive and
+non-restricted on both the 52832 and the 52833 — the safe choice across
+the whole selected set). Firmware pin assignments and the KiCad
+schematic should follow whichever plan (unified or per-module) is chosen;
+fold this into the knock-on edits listed in §9.3.
+
+---
+
+## 10. Open points (hardware)
+
+- **Module choice** (§9) — E73-2G4M08S1E (nRF52833) dropped; confirm
+  Fanstel BT832 (nRF52832): footprint (castellated pins), 32.768kHz
+  crystal, pin plan, ANT bring-up, JLCPCB stock at order time; then
+  propagate to specs doc, firmware README/comment, `hardware/board` and
+  KiCad. Alternatives Raytac MDBT42Q, E73-2G4M08S1C, E73-2G4M04S1B.
 - **P-MOSFET reverse-polarity stage** (§3) — part selection (Vgs(th),
   Rds(on) at the CR2032's low current levels, package size) not yet
   done; add to schematic/BOM.
@@ -576,5 +1221,8 @@ that conclusion, just firmer evidence behind it.
 - **Temperature sensor accuracy figure** (§7) — reconcile ±4°C vs.
   ±5°C against the nRF52832 datasheet, and confirm the first-sample
   timing in `ant_garmin.c` relative to the triggering button press.
+- **User-feedback LEDs** (§8) — APT2012SURCK + APT2012CGCK candidates
+  (AlGaInP, not InGaN), GPIOs outside P0.22–P0.31, resistors; add to
+  schematic; bench current check + outdoor daylight test.
 - Everything else affecting the PCB (enclosure, mounting, sealing) is
   still tracked in `gopro_garmin_remote_specs.md` §4 ("Open points").
