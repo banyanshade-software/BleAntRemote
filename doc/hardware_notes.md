@@ -98,6 +98,10 @@ running off the coin cell" — this is already what the existing `J1` SWD
 header (per the specs doc BOM) is for. Worth adding to the PCB/BOM notes
 explicitly so nobody wires VDD as a power feed by mistake later.
 
+**`J1` now also carries SWO** (one extra pin, P0.18 on the nRF52832) for
+ITM/printf trace — see §9.7 "Debug & trace" for the full 5-pin `J1`
+pinout and why ETM/parallel trace is out of scope.
+
 ---
 
 ## 3. Reverse-polarity protection for the CR2032
@@ -1079,8 +1083,9 @@ pads of each of the three selected modules (§9.3).
   default to the NFC antenna function.
 - **Reserved, not usable as user I/O**: XL1/XL2 (P0.00/P0.01, the
   32.768kHz crystal — on the BT832 and S1E; the S1B has it internal),
-  SWDIO/SWDCLK (debug), and RESET (**P0.21** on nRF52832, **P0.18** on
-  nRF52833).
+  SWDIO/SWDCLK (debug), RESET (**P0.21** on nRF52832, **P0.18** on
+  nRF52833), and **SWO** for trace (see "Debug & trace" below) —
+  **P0.18 on the nRF52832** (BT832, S1B).
 
 **Radio-restricted pins ("… low frequency I/O only" in the PS pin table)**
 
@@ -1134,16 +1139,18 @@ unconnected, §9.2). All 16:
 | 9 | VDD | power |
 | 10 | GND | power |
 | 11 | P0.13 | **LED green** (high-drive, non-restricted) |
-| 12 | P0.18 | spare / alt LED (high-drive, non-restricted) |
+| 12 | P0.18 | **SWO** (trace) → `J1`; also TRACEDATA[0]/SWO on nRF52832 |
 | 13 | P0.20 | **LED red** (high-drive, non-restricted) |
 | 14 | P0.21/RESET | RESET |
 | 15 | SWDCLK | debug |
 | 16 | SWDIO | debug |
 
-Here P0.18 (pin 12) and P0.27 (pin 2) are spares; if we want to free the
-NFC pins, move Button 4 → P0.18 and keep only one NFC pin (or route an
-LGA pad). With 5 buttons + 2 LEDs we are at the limit of the 16
-castellated pins.
+P0.18 (pin 12) is now reserved for **SWO** (trace, see below), so on the
+BT832 the only remaining spare is **P0.27 (pin 2)**. With 5 buttons +
+2 LEDs + SWO we are at the limit of the 16 castellated pins: freeing the
+two NFC pins (P0.09/P0.10) would require routing an LGA pad, since P0.18
+is no longer available as a fallback. If SWO is not populated on a given
+board, pin 12 / P0.18 can fall back to a spare high-drive I/O.
 [BT832 datasheet (pin functions)](https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/40/BT832_A_F_AF_V2.04_Dec-2017.pdf)
 
 **Ebyte E73-2G4M08S1E (nRF52833)** — plenty of GPIOs, so no NFC pin is
@@ -1190,6 +1197,50 @@ are plentiful:
 radio-restricted set and P0.25–P0.31 are also analog inputs. They remain
 fine as extra button inputs. The NFC pins P0.09/P0.10 are pins 24/25
 here and are left free in this plan.)
+
+#### Debug & trace — SWD + SWO only (J1)
+
+**Decision: expose SWD plus SWO, and nothing more.** This gives full
+halt-mode debug *and* ITM (printf / PC-sampling) trace, at the cost of a
+single extra pin. Full instruction trace (ETM) is explicitly **out of
+scope** — it needs the 4-bit parallel trace port (TRACECLK + TRACEDATA
+[0:3] = 5 high-speed pins) and a J-Trace probe; TRACECLK is P0.20 (our
+red LED) and TRACEDATA[1:3] are not even on the BT832 castellated pins,
+so parallel trace is not buildable here anyway.
+
+What SWD alone already gives (nRF52832 PS §16): the full Debug Access
+Port — **6 hardware breakpoints + 2 literal comparators (FPB)**, **4
+watchpoints (DWT)**, single-step, register/memory/variable inspection,
+flashing, and real-time debug (high-priority IRQs keep running while
+halted). **No extra pin is needed for breakpoints.**
+
+Trace is multiplexed onto GPIOs in two mutually-exclusive TPIU modes
+(PS §16.6): **Serial (SWO)** carries ITM only on **one pin, SWO**;
+**Parallel** carries ITM+ETM on five pins. We take SWO.
+- **SWO pin = P0.18 on the nRF52832** (BT832, S1B) — `TRACEDATA[0]/SWO`.
+  On the BT832 this is castellated pin 12 (reserved above).
+- On the **nRF52833** (S1E) P0.18 is the RESET pin; its SWO/trace pins
+  are on different GPIOs — check the nRF52833 PS trace-pin table before
+  wiring SWO on that module.
+- SWO needs a probe that supports it (J-Link: yes; ST-Link V2: flaky).
+  Set the SWO GPIO drive to `H0H1` if the default `S0S1` is too slow
+  (PS §16.6), and don't let firmware override it during a trace session.
+
+**`J1` pinout (5 signals):**
+
+| J1 pin | Signal | Notes |
+|---|---|---|
+| 1 | SWDIO | internal pull-up |
+| 2 | SWDCLK | internal pull-down |
+| 3 | GND | |
+| 4 | VDD (sense) | **sense only**, board stays coin-cell-powered (§2) |
+| 5 | **SWO** | P0.18 (nRF52832); optional to populate |
+
+For day-to-day logging, **SEGGER RTT over SWD needs no pin at all** (it
+rides the existing SWD link) and is the Zephyr `log` backend of choice;
+SWO/ITM is the fallback when precise timing or PC sampling is wanted. If
+SWO is left unpopulated on a board, P0.18 reverts to a spare high-drive
+I/O.
 
 **Common to all three**: SWDIO/SWDCLK on `J1` (§2), RESET broken out,
 LEDs on **P0.13 / P0.20** (the two pins that are high-drive and
