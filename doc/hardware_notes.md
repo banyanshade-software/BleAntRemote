@@ -260,8 +260,9 @@ BOM.
 (2 for the camera, page-left/page-right for the Garmin, optionally a
 5th — see "Handling of the 2 camera buttons" in the specs doc's open
 points for whether camera ON/OFF stays 2 separate buttons), each:
-- large enough to operate **with cycling gloves on** — actuator
-  diameter roughly **7–10mm**, possibly a bit less,
+- operable **with cycling gloves on** — actuator diameter **may be
+  reduced to ~4–5mm** (user decision, supersedes the earlier 7–10mm
+  target); a small cap can still enlarge the touch target if wanted,
 - **rain-resistant** (splashing/dripping water while riding, not
   submersion),
 - **easy to source and cheap**.
@@ -293,8 +294,51 @@ footprint in §1) favors through-hole parts. That rules out most
 tend to be SMD-first (including Ultramec 6C and C&K's KSE mentioned
 in an earlier revision of this section) — but not all of them.
 
-**Recommendation: APEM/MEC `Multimec 5G` series, through-hole, with a
-round "floating cap" accessory.**
+**Revised requirement (user correction #3): actuator may shrink to
+~4–5mm.** This changes the pick. With a 4–5mm target, a plain **sealed
+through-hole tact switch no longer needs an oversized cap**, which
+collapses the stack height from the Multimec 5G's ~12.5mm to ~5mm and
+drops the cost — exactly the class of part the earlier revision wrongly
+said did not exist (corrected below).
+
+**Recommendation (new primary): a sealed IP67 through-hole 6×6mm tact
+switch — Omron `B3W-AQ` series (e.g. `B3W-1002-AQ`).**
+- **Sealed to IP67** (IEC 60529, sealing excludes the terminals) with a
+  genuine sealed construction, **through-hole**, **6×6mm** body,
+  mounting-compatible with the ubiquitous B3F series.
+- **Flat plunger ~4.3mm** above the board (B3W-1002-AQ) — inside the new
+  4–5mm target without any cap, ~5mm total stack vs the Multimec's
+  ~12.5mm. A **projected-plunger** variant (B3W-4000 series, ~7.3mm) is
+  available if a slightly taller/larger target is wanted.
+- **230gf** operating force, bounce ≤5ms, **300,000 operations** min —
+  adequate for a handlebar remote (lighter duty than the Multimec's 10M,
+  but 300k presses is still years of use).
+- **Widely sourced** at Farnell/element14, DigiKey, Mouser — a standard
+  Omron catalog part, hand-solderable (through-hole), cheap.
+  [Omron B3W-AQ datasheet](https://omronfs.omron.com/en_US/ecb/products/pdf/en-b3w-aq.pdf) ·
+  [Omron B3W product page](https://components.omron.com/us-en/products/switches/B3W) ·
+  [Farnell: B3W-1002 sealed tact switch](https://uk.farnell.com/omron/b3w1002/switch-sealed-flat-230gf/dp/1961037)
+
+**Alternatives in the same class** (sealed IP67 THT 6×6mm tact, if the
+Omron is out of stock or a different feel is wanted): **E-Switch
+`TL6059`** (IP67, radial leads, two actuator heights) and **Multicomp
+Pro `MPTSHW-67T-V` / `-69T-V`** (6×6mm IP67, round button, stocked at
+Farnell).
+[E-Switch TL6059 (IP67 THT tact)](https://www.e-switch.com/news-events/blog/new-product/tl6059-series-ip67-tht-tact-switch-radial-leads/) ·
+[Farnell: MPTSHW-69T-V](https://uk.farnell.com/multicomp-pro/mptshw-69t-v/tactile-switch-0-05a-12vdc-th/dp/4153464)
+
+**Note on the glove target**: 4–5mm is small for a thick glove. If field
+testing shows it's too small, add a small snap-on cap (Omron offers caps
+for the B3W/B3F family) to grow the touch target a few mm without
+changing the switch or its sealing — a far smaller stack-up than the
+Multimec + Ø9.6–12mm cap below.
+
+---
+
+**Fallback (larger glove target): APEM/MEC `Multimec 5G` series,
+through-hole, with a round "floating cap" accessory.** Kept here only if
+the 4–5mm sealed tact switch proves too small even with a cap, and a
+Ø9.6–12mm actuator is really required (at the cost of the ~12.5mm stack).
 - **Switch itself**: **through-hole**, IP67 sealed to IEC 60529 (PPS
   housing + actuator, **silicone rubber sealing**, stainless steel
   contact springs) — a genuinely sealed switch, not "sealed by an
@@ -335,26 +379,26 @@ round "floating cap" accessory.**
   camera buttons distinctly from the Garmin page-left/page-right/lap
   buttons without separate labeling.
 
-**Why not a smaller, lower-stack sealed THT switch instead**: sealed
-THT tact switches with actuators already in the 7–10mm range and a
-sub-10mm total stack do not appear to exist as a single stocked part —
-this class of switch (CIT's `STV` series, C&K's sealed sealed lines,
-etc.) sticks to the same small-actuator-plus-cap pattern as the SMD
-world once sealing is required; the Multimec 5G's ~12.5mm stack is
-close to the practical minimum for "sealed + through-hole + big enough
-for a gloved finger" today, not a suboptimal pick within that
-constraint set.
+**Correction to the earlier "no small sealed THT switch exists" claim**:
+that reasoning only held for a **7–10mm** actuator, where sealing did
+force a small-switch-plus-oversized-cap stack. Once the target drops to
+**4–5mm** (correction #3), the requirement is met by a plain sealed IP67
+6×6mm tact switch (Omron B3W-AQ and the alternatives above) at a ~5mm
+stack — so the Multimec 5G's ~12.5mm is no longer "the practical
+minimum", it is specifically the price of insisting on a Ø9.6–12mm
+gloved-finger target.
 
 **Open points**:
 - Final button count (4 vs. 5) — tied to the still-open "Handling of
   the 2 camera buttons" question in the specs doc.
-- Pick the exact cap code (`1ES` Ø9.6mm vs. the Ø12mm polyamide round
-  cap) once the enclosure's front-panel button-hole size is decided,
-  and get a firm per-unit price for the switch+cap combination for the
-  BOM.
-- The ~12.5mm total switch+cap stack height now sets a floor on the
-  enclosure's thickness behind each button — fold this into the
-  enclosure design (specs doc §4).
+- Confirm the Omron `B3W-1002-AQ` actuator Ø and feel are acceptable
+  with a riding glove (bench + field); decide whether a snap-on cap is
+  needed, and only then fall back to the Multimec 5G if 4–5mm is truly
+  too small. Get a firm per-unit price for the chosen switch for the BOM.
+- The sealed-tact stack is now **~5mm** above the board (B3W flat
+  plunger), not ~12.5mm — a much lower floor on the enclosure thickness
+  behind each button (fold into the enclosure design, specs doc §4). The
+  ~12.5mm figure only applies if the Multimec fallback is taken.
 - Real-world IP65/IP67 validation once a prototype board + enclosure
   exist — with a PCB-mount switch, sealing at the enclosure depends on
   how the case meets the PCB around each button (a gasket, or the
@@ -371,16 +415,17 @@ medical-device front panels since): a thin flexible sandwich — usually
 two printed-circuit polyester layers with a spacer between them, a
 metal "snap dome" under each key position for tactile click, and a
 printed graphic overlay on top — instead of discrete mechanical
-switches. It is a legitimate, very compelling alternative to the
-Multimec 5G recommendation in §5 on exactly the axis this project cares
-about: **compactness**.
+switches. It is a legitimate alternative to the sealed-tact-switch
+recommendation in §5 on exactly the axis this project cares about:
+**compactness**.
 
 - **Thickness**: a standard (non-waterproofed) membrane switch stack is
   on the order of **~0.7mm**; a waterproofed version (thicker overlay +
-  edge-sealing adhesive) is on the order of **~1.4mm** — vs. the
-  **~12.5mm** total stack for a Multimec 5G switch + oversized cap
-  (§5). This is the single biggest advantage: essentially the entire
-  vertical budget a switch+cap combo needs disappears.
+  edge-sealing adhesive) is on the order of **~1.4mm** — vs. **~5mm**
+  for the sealed B3W-AQ tact switch now picked in §5 (or ~12.5mm for the
+  Multimec + cap fallback). The thickness advantage is smaller against
+  the 4–5mm sealed tact switch than it was against the Multimec, but a
+  membrane is still the thinnest option and gives free icon printing.
   [LID/tactilemembrane: standard vs. waterproof membrane switch stack-up](https://tactilemembrane.com/waterproof-membrane-switch-harsh-environment-design/)
 - **Sealing**: the membrane is bonded to the front panel with a
   continuous perimeter adhesive (e.g. 3M acrylic adhesive films
@@ -389,8 +434,9 @@ about: **compactness**.
   well-documented outcome** for this construction, not a stretch.
   [LID/tactilemembrane: IP67/NEMA 4X sealed membrane switch design](https://tactilemembrane.com/waterproof-membrane-switch-harsh-environment-design/)
 - **Actuator size/shape is free**: because each "button" is just
-  printed artwork plus a dome underneath, the 7–10mm glove-friendly
-  target from §5 is trivial to hit exactly (or any shape/spacing) —
+  printed artwork plus a dome underneath, any glove-friendly target
+  (the 4–5mm of §5, or larger) is trivial to hit exactly (any
+  shape/spacing) —
   and the graphic layer can print icons/labels directly on each button
   (camera on/off, left/right arrows, lap) instead of relying on
   discrete colored caps.
@@ -450,11 +496,12 @@ about: **compactness**.
    [RSP: custom membrane switch manufacturing](https://www.rspinc.com/capabilities/membrane-switches/) ·
    [LID/tactilemembrane: custom membrane switches, 2-week prototype](https://tactilemembrane.com/custom-membrane-switches-and-keypads-precision-durability-fast-turnaround/)
 
-**Recommendation**: keep §5's `Multimec 5G` (through-hole switch +
-cap) as the pick for the **first prototype board** — it's a
-buy-today, solder-today catalog part with no MOQ/lead-time risk, even
-though it costs ~12mm of stack height. Treat the membrane keypad as
-the **strong follow-up option once the design stabilizes**:
+**Recommendation**: use §5's sealed IP67 THT tact switch (Omron
+`B3W-AQ`) for the **first prototype board** — a buy-today, solder-today
+catalog part, no MOQ/lead-time risk, and now only ~5mm of stack (the
+4–5mm actuator decision removed the Multimec's height penalty that
+previously motivated the membrane). Treat the membrane keypad as the
+**follow-up option once the design stabilizes**:
 - If the button count settles at exactly 4, revisit the NKK `FM`
   series (`FMBN04BE`) as a possible catalog drop-in — pending the
   matrix-output pinout check above.
@@ -823,7 +870,6 @@ expose XL1/XL2 (P0.00/P0.01). Most third-party modules work this way.
 | Ebyte **E73-2G4M08S1C** | nRF52840 | listed | 13 × 18 | **built in** | to check | to check | none | candidate |
 | Fanstel **BT832** | nRF52832 | listed | 14 × 16 × 1.9 | external, **XL1/XL2 on castellated pins 3/4** | **16 castellated pins (iron OK)** + 24 LGA pads underneath (optional) | **inductors inside the module** | none stated | **preferred** |
 | Raytac **MDBT42Q** (-P = PCB antenna) | nRF52832 | listed | **10 × 16 × 2.2** | external, **XL1/XL2 on pads 13/14** | **edge pads extend past the outline → iron OK**. Only P0.23/P0.24 sit underneath (can stay unused) | DC/DC is the default mode. The ref. circuit shows L2/L3 → location to check | none stated (an "-AT" variant exists separately) | alternative (hand assembly) |
-| Raytac **MDBT50Q** (-P = PCB antenna) | nRF52840 | listed | 10.5 × 15.5 × 2.05 | external, XL1/XL2 on pads 17/18 | **two inner rows of pads → hot air / reflow, not iron** | **Reg1 inductor inside the module** | Raytac test code (erasable) | candidate if hot-air soldering is OK |
 
 Sources:
 - E73-2G4M08S1E manual (local copy above).
@@ -835,15 +881,11 @@ Sources:
   [E73-2G4M08S1C](https://www.cdebyte.com/products/E73-2G4M08S1C)
   ("nRF52840 … 13.0*18.0mm … With 32.768K real-time clock"). The S1B
   size comes from the series table in the S1E manual (p. 11).
-- Raytac datasheets:
+- Raytac datasheet:
   [MDBT42Q](https://www.espruino.com/datasheets/MDBT42Q-E.pdf) (§2.1
   pinout, §2.2 recommended pads, §8 reference circuit: "Module's default
-  is using DC-DC mode, and must connect it to external 32.768khz") ·
-  [MDBT50Q](https://cdn.sparkfun.com/assets/4/7/4/3/8/_nRF52840__MDBT50Q-1MV2___MDBT50Q-P1MV2_Ver.K_spec.pdf)
-  (§2.1–2.2, §8: "32MHz crystal and RF (VDD) DC/DC inductor (Reg1) are
-  already inside the module").
-- Both Raytac datasheets ask for a **3.8mm no-ground zone** under the
-  antenna end.
+  is using DC-DC mode, and must connect it to external 32.768khz"). It
+  asks for a **3.8mm no-ground zone** under the antenna end.
 - Fanstel BT832 datasheet v2.04
   ([PDF](https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/40/BT832_A_F_AF_V2.04_Dec-2017.pdf)): "16 castellated pins … SMT equipment is not required
   for soldering castellated pins", pin table p. 11, "Two inductors
@@ -912,12 +954,13 @@ Sources:
 but **~2.1× the area** of the S1E (17.5 × 28.7 vs 13 × 18mm), and a PCB
 antenna with its keep-out. Only worth it if the MDBT42Q is unavailable.
 
-**E73-2G4M08S1C / MDBT50Q (nRF52840)**: ANT-supported, and the **same
-chip as the nRF52840 Dongle** used for BLE bring-up. The firmware
-already plans to support both nRF52832 and nRF52840 (specs doc,
-"Decision: support both nRF52832 and nRF52840"). The S1C has a built-in
-LFXO but its pads are not yet checked. The MDBT50Q needs hot-air
-soldering. Choosing either means redoing §8 against the nRF52840 PS.
+**E73-2G4M08S1C (nRF52840)**: ANT-supported, and the **same chip as the
+nRF52840 Dongle** used for BLE bring-up. The firmware already plans to
+support both nRF52832 and nRF52840 (specs doc, "Decision: support both
+nRF52832 and nRF52840"). The S1C has a built-in LFXO but its pads are
+not yet checked. Choosing it means redoing §8 against the nRF52840 PS.
+(The Raytac MDBT50Q nRF52840 module, previously listed here, is dropped:
+it needs hot-air soldering and is not in the JLCPCB library — see §9.5.)
 
 ### 9.3 Recommendation
 
@@ -940,8 +983,8 @@ soldering. Choosing either means redoing §8 against the nRF52840 PS.
    of the others (17.5 × 28.7mm).
 
 Previously-listed alternatives now set aside (nRF52840 path, or
-non-JLCPCB): Raytac MDBT42Q, E73-2G4M08S1C, MDBT50Q. The E104-BT5032A
-remains ruled out.
+non-JLCPCB): Raytac MDBT42Q, E73-2G4M08S1C. The Raytac MDBT50Q and the
+E104-BT5032A are ruled out.
 
 Before freezing the PCB:
 1. **Footprint** from the BT832 datasheet (castellated pins extended
@@ -1006,11 +1049,24 @@ pages. Stock and price change daily, so check them when ordering.
 | **Fanstel BT832** | nRF52832 | [C7092400](https://jlcpcb.com/partdetail/Fanstel-BT832/C7092400) | Extended | **Economic + Standard** | EasyEDA symbol/footprint available |
 | Ebyte E73-2G4M08S1C | nRF52840 | [C356849](https://jlcpcb.com/partdetail/Chengdu_Ebyte_ElecTech-E73_2G4M08S1C/C356849) | Extended | **Standard only, X-ray required** | Built-in LFXO |
 | Ebyte E73-2G4M04S1B | nRF52832 | [C411306](https://jlcpcb.com/partdetail/Chengdu_Ebyte_ElecTech-E73_2G4M04S1B/C411306) | — | Economic + Standard | 28.7 × 17.5mm, built-in LFXO |
-| Raytac MDBT50Q-512K | **nRF52833** | [C6904155](https://jlcpcb.com/partdetail/RAYTAC-MDBT50Q512K/C6904155) | Extended | Economic + Standard, X-ray | **Not usable**: the -512K variant is the nRF52833 (the nRF52840 one is MDBT50Q-1MV2) |
-| Raytac MDBT42Q | nRF52832 | not found | — | — | Would need JLCPCB global sourcing or consigned parts (not checked) |
-
 "Extended" parts carry a per-part loading fee at JLCPCB (Basic parts
 don't). One module plus a few passives keeps that small.
+
+**Raytac in the JLCPCB/LCSC library (checked 2026-10)** — asked whether a
+Raytac nRF52832 or nRF52840 module could be assembled by JLCPCB:
+
+| Raytac module | SoC | In JLCPCB library? |
+|---|---|---|
+| MDBT42Q | nRF52832 | **No** — not in LCSC/JLCPCB (distributors only: TME, Mouser) |
+| MDBT50Q-1MV2 | nRF52840 | **No** — not in LCSC/JLCPCB (TME/DigiKey/Ozdisan only) |
+| MDBT50Q-512K | nRF52833 | Yes ([C6904155](https://jlcpcb.com/partdetail/RAYTAC-MDBT50Q512K/C6904155)) — but **nRF52833, not ANT-usable**, so irrelevant |
+
+**Conclusion**: the *only* Raytac module JLCPCB can place is the nRF52833
+MDBT50Q-512K, which we can't use for ANT. No Raytac nRF52832/nRF52840
+module is in the library, so a Raytac part would mean JLCPCB global
+sourcing / consigned parts, not standard SMT. The JLCPCB-assemblable set
+therefore stays: **Fanstel BT832 (52832)**, **E73-2G4M08S1C (52840)**,
+**E73-2G4M04S1B (52832)**. (Re-check at order time — the library changes.)
 
 ### 9.6 Cost estimate (module placed at JLCPCB)
 
@@ -1264,11 +1320,12 @@ fold this into the knock-on edits listed in §9.3.
 - **SWD header (`J1`) wiring convention** — make sure schematic/BOM
   notes explicitly document "sense-only, board stays coin-cell-powered
   during programming" (§2) so it isn't miswired as a power line later.
-- **Button hardware** (§5–§6) — decide between the `Multimec 5G`
-  through-hole switch+cap (buildable now, ~12.5mm stack) and a
-  membrane keypad (far thinner, but either fixed at 4 keys off-the-shelf
-  pending a pinout check, or custom-manufactured with MOQ/lead-time
-  implications) — final button count, and this choice, both still open.
+- **Button hardware** (§5–§6) — primary pick is now the sealed IP67 THT
+  tact switch (Omron `B3W-AQ`, ~5mm stack) following the 4–5mm actuator
+  decision; validate the gloved-finger feel, else add a cap or fall back
+  to the `Multimec 5G` + cap (~12.5mm). Membrane keypad stays the thin
+  follow-up option (4-key off-the-shelf pending pinout check, or custom
+  with MOQ/lead-time). Final button count (4 vs. 5) still open.
 - **Temperature sensor accuracy figure** (§7) — reconcile ±4°C vs.
   ±5°C against the nRF52832 datasheet, and confirm the first-sample
   timing in `ant_garmin.c` relative to the triggering button press.
