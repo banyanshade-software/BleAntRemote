@@ -128,9 +128,11 @@ Each button triggers an independent, immediate action (no mode/menu to navigate)
   button combo or a magnetic/reed switch, to be defined), not continuously.
 
 ### MCU / radio
-- **Nordic nRF52832** (Ebyte E73-2G4M08S1E module) — Cortex-M4F, 512KB flash / 64KB RAM.
-  Remains the **primary target**: existing KiCad schematic/BOM, no
-  hardware rework needed.
+- **Nordic nRF52832** (on a module to be chosen — shortlist in
+  `hardware_notes.md` §9: Fanstel BT832, or the Ebyte E73-2G4M04S1B;
+  the owned E73-2G4M08S1E is an nRF52833 kept only as a 2nd-choice test
+  board) — Cortex-M4F, 512KB flash / 64KB RAM. Remains the **primary
+  target chip**.
 - Chosen because the silicon natively supports both **BLE and ANT+** on
   the same radio, and because it is the only chip successfully tested in
   practice for BLE pairing with a GoPro (unlike the ESP32).
@@ -312,8 +314,9 @@ is officially named **Environment**, not "Environment Sensor."
   not continuously, to preserve battery life.
 
 ### PCB
-- Based on the **Ebyte E73-2G4M08S1E** module (18.0 x 13.0mm, 43-pin
-  castellated package).
+- Built around a **castellated nRF52832 radio module** — the specific
+  module is not yet fixed (shortlist and comparison in
+  `hardware_notes.md` §9; current favourite: Fanstel BT832).
 - Footprint with **extended pads** (tabs protruding outward from the module)
   to allow hand soldering with an iron, without a reflow oven.
 - Programming/debug via **SWD** (SWDIO/SWCLK/GND/VDD pins on a header or
@@ -334,13 +337,13 @@ is officially named **Environment**, not "Environment Sensor."
 
 | Ref. | Component | Qty | Role | Notes |
 |------|-----------|----------|------|-----------|
-| U1 | **Ebyte E73-2G4M08S1E** module (nRF52832) | 1 | MCU + BLE/ANT+ radio | Castellated package, extended-pad footprint |
+| U1 | **nRF52832 radio module** (TBD — see hardware_notes §9; e.g. Fanstel BT832) | 1 | MCU + BLE/ANT+ radio | Castellated package, extended-pad footprint |
 | BT1 | **CR2032** coin cell + holder | 1 | Power supply | Direct supply, no regulator |
 | SW1–SW5 | Push buttons (tact switch) | 5 | Camera ON, Camera OFF, Page right, Page left, Lap | GPIO pull-up, active-low |
 | C1 | **Tantalum/polymer 47–100µF** capacitor, 0805/1206 package | 1 | Voltage-drop buffer (radio current spikes) | Low ESR required |
 | C2 | **100nF** ceramic capacitor, 0402 package | 1 | HF filtering | — |
 | J1 | **SWD** header/pads (SWDIO, SWCLK, GND, VDD) | 1 | Programming/debug | Not populated in production, useful for prototyping |
-| PCB | Custom board (extended-pad E73 footprint) | 1 | Carrier | KiCad, template already drafted in the project |
+| PCB | Custom board (extended-pad module footprint) | 1 | Carrier | KiCad, template already drafted in the project |
 | — | Enclosure (3D printed or other) | 1 | Protection/handlebar mount | To be defined (sealing to be planned) |
 
 > Note: no thermistor (NTC) or divider resistor is needed — ambient
@@ -575,8 +578,8 @@ deployment models over time:
 `doc/compatibility.html` page, not just background research — see
 "Access & integration process" below for how that page was reached.)
 
-**The nRF52832 already used in this project (Ebyte E73-2G4M08S1E, existing
-KiCad design) is supported**, provided the project's nRF Connect SDK is on
+**The nRF52832 targeted by this project (the planned module is nRF52832 —
+see hardware_notes §9) is supported**, provided the project's nRF Connect SDK is on
 v2.9.2 or later (the "Add-on" deployment model). An initial research pass
 only found the older "Manifest"-model compatibility data (nRF52840/
 nRF5340 only) and this document briefly recorded a decision to move the
@@ -785,9 +788,9 @@ Do not mix the two up if ever cross-referencing nRF5 SDK sample code.
   Adopter access has since been obtained, so this remains unverified from
   here specifically.
 - If a future nRF52840-specific board is added later: whether an
-  nRF52840-family Ebyte module (e.g. **E73-2G4M08S1C**, confirmed to
-  exist as a real shipping part) is pin-compatible with the existing
-  E73-2G4M08S1E KiCad footprint — not verified, and the nRF52840 has more
+  nRF52840-family module (e.g. Ebyte **E73-2G4M08S1C**, confirmed to
+  exist as a real shipping part) is pin-compatible with whatever nRF52832
+  module footprint is adopted — not verified, and the nRF52840 has more
   GPIOs than the nRF52832, so a pin-for-pin match is unlikely even within
   the same module family. Treat as needing its own footprint, not a
   drop-in swap, until checked against both datasheets.
