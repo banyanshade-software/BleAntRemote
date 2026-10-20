@@ -30,7 +30,7 @@ claims are marked, unverified/assumed points are flagged as such.
 - **Sensing**: ambient temperature is read from the nRF52832's *internal*
   die-temperature peripheral — no external thermistor, no extra ADC
   input.
-- **PCB**: custom board built around the E73 module's castellated
+- **PCB**: custom board built around the chosen module's castellated
   footprint, with **extended pads** so it can be hand-soldered with an
   iron (no reflow oven required).
 - **User feedback**: red + yellow-green (AlGaInP) indicator LEDs,
@@ -196,7 +196,7 @@ framing now that §4 has picked a specific (non-keying) holder part.
 **Requirement**: a through-hole (solder-in-PCB) CR2032 holder, easily
 sourced from standard distributors — and, per user correction, the cell
 must sit **flat against the PCB** (lying parallel to the board, behind
-the Ebyte module), not standing on edge or protruding vertically, since
+the module), not standing on edge or protruding vertically, since
 this has to fit in a slim handlebar-mounted enclosure.
 
 **Correction — the Keystone 1074 (previously recommended) does not
@@ -207,7 +207,7 @@ from above, with the manufacturer's own listing giving a **0.72"
 of clearance standing straight up off the PCB. That's fine for a
 project with a deep case (or the battery on a separate compartment) but
 wrong here, where the datasheet directly says the cell must lie flat
-behind the Ebyte module in a slim enclosure.
+behind the module in a slim enclosure.
 
 **Revised recommendation: MPD (Memory Protection Devices) `BC2032-E2`**
 — a horizontal, through-hole, "open" coin-cell holder where the CR2032
@@ -288,7 +288,7 @@ a generic panel-mount button.
 **Revised requirement (user correction #2): through-hole, not SMD.**
 The first PCB-mount candidate proposed here (APEM/MEC's `Ultramec 6C`)
 was surface-mount — ruled out, since this project's hand-solder-with-an-iron
-approach (already the rationale for the Ebyte module's extended-pad
+approach (already the rationale for the module's extended-pad
 footprint in §1) favors through-hole parts. That rules out most
 "low-profile sealed keypad switch + floating cap" families, which
 tend to be SMD-first (including Ultramec 6C and C&K's KSE mentioned
@@ -921,7 +921,7 @@ Sources:
   [Mouser: BT832A/AF are nRF52810](https://www.mouser.ie/new/fanstel/fanstel-bt832a-bt832af-modules) ·
   [DigiKey: BT832F (nRF52832)](https://www.digikey.com/en/product-highlight/f/fanstel/bt832f-long-range-bluetooth-5-module)
 - Same chip as the firmware, the specs doc and §8 assume.
-- 14 × 16mm, smaller than the E73.
+- 14 × 16mm, smaller than the E73-2G4M08S1E (13 × 18mm).
 - **DC/DC inductors confirmed inside the module** (open point §8.5
   closed for this module).
 - **The 16 castellated pins alone cover our needs**:
@@ -988,7 +988,7 @@ E104-BT5032A are ruled out.
 
 Before freezing the PCB:
 1. **Footprint** from the BT832 datasheet (castellated pins extended
-   outward for iron soldering, like the current E73 template; LGA pads
+   outward for iron soldering, like the current module template; LGA pads
    either omitted or left unconnected). The antenna overhangs the board
    edge by 6mm.
 2. **32.768kHz crystal**: ±20 ppm class, CL compatible with the nRF52832
